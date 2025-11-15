@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crypto YouTube Harvester</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="app-header">
+        <div>
+          <h1>Crypto YouTube Harvester</h1>
+          <p class="app-tagline">Organize, filter and manage outreach-ready channels.</p>
+        </div>
+        <div class="quick-stats" id="quickStats">
+          <span class="quick-stats__loading">Loading stats…</span>
+        </div>
+      </header>
+
+      <section class="discover-panel">
+        <div class="discover-controls">
+          <div class="discover-primary">
+            <button class="btn btn--green btn--xl" id="discoverBtn" type="button">
+              <span class="btn-icon">🔍</span>
+              Discover
+            </button>
+          </div>
+          <p class="discover-summary" id="discoverSummary">
+            Configure discovery keywords and filters to get started.
+          </p>
+        </div>
+        <div class="discover-utilities">
+          <div class="action-group">
+            <button
+              class="btn btn--green btn--menu"
+              id="importExportToggle"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              <span class="btn-icon">📦</span>
+              Import / Export
+              <span class="btn-caret">▾</span>
+            </button>
+            <div class="dropdown-menu" id="importExportMenu" role="menu" hidden>
+              <button class="dropdown-menu__item" id="exportCsvBtn" type="button">
+                <span class="btn-icon">⬇️</span>
+                Export CSV
+              </button>
+              <button class="dropdown-menu__item" id="exportBundleBtn" type="button">
+                <span class="btn-icon">🧰</span>
+                Export bundle
+              </button>
+              <button class="dropdown-menu__item" id="importBlacklistBtn" type="button">
+                <span class="btn-icon">📥</span>
+                Import blacklist (CSV)
+              </button>
+            </div>
+          </div>
+          <div class="action-group">
+            <button
+              class="btn btn--green btn--menu"
+              id="enrichBtn"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              <span class="btn-icon">⚙️</span>
+              Enrich
+              <span class="btn-caret">▾</span>
+            </button>
+            <div class="dropdown-menu" id="enrichMenu" role="menu" hidden>
+              <button class="dropdown-menu__item" id="enrichMenuFullBtn" type="button">
+                <span class="btn-icon">⚙️</span>
+                Enrich (full)
+              </button>
+              <button class="dropdown-menu__item" id="enrichEmailBtn" type="button">
+                <span class="btn-icon">✉️</span>
+                Enrich (Email-only)
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="discover-runner">
+          <button class="btn btn--red" id="discoverStopBtn" hidden>
+            <span class="btn-icon">⏹️</span>Stop discovery loop
+          </button>
+          <span class="discover-runner__counter" id="discoverRunCounter" hidden>
+            Runs: 0 • New channels: 0
+          </span>
+        </div>
+        <div class="discover-toggles">
+          <label class="discover-toggle"><input type="checkbox" id="enrichNeverToggle" /> Never re-enrich</label>
+          <label class="discover-toggle"><input type="checkbox" id="enrichForceToggle" /> Force run</label>
+        </div>
+        <div class="status-container">
+          <div class="system-status" id="systemStatusBar" aria-live="polite">
+            <span class="system-status__item">
+              <span class="system-status__indicator system-status__indicator--idle"></span>
+              <span>Collecting system status…</span>
+            </span>
+          </div>
+          <div class="status-bar" id="statusBar" hidden></div>
+          <div class="status-bar status-bar--info" id="progressBar" hidden></div>
+          <div class="status-bar" id="summaryBar" hidden></div>
+        </div>
+      </section>
+
+      <nav class="tab-navigation">
+        <button class="tab is-active" data-category="active">Active</button>
+        <button class="tab" data-category="archived">Archived</button>
+        <button class="tab" data-category="blacklisted">Blacklisted</button>
+      </nav>
+
+      <section class="filters">
+        <div class="filter-grid">
+          <div class="filter-field">
+            <label for="filterQuery">Search</label>
+            <input type="text" id="filterQuery" placeholder="Name, URL, email" />
+          </div>
+          <div class="filter-field">
+            <label for="filterLanguages">Languages</label>
+            <input type="text" id="filterLanguages" placeholder="e.g. en, de, es" />
+          </div>
+          <div class="filter-field filter-field--range">
+            <label>Subscribers</label>
+            <div class="range-inputs">
+              <input type="number" id="filterMinSubs" placeholder="Min" min="0" />
+              <span>–</span>
+              <input type="number" id="filterMaxSubs" placeholder="Max" min="0" />
+            </div>
+          </div>
+          <fieldset class="filter-field filter-field--status">
+            <legend>Status</legend>
+            <div class="status-grid">
+              <label class="status-option"><input type="checkbox" name="statusFilter" value="new" /> New</label>
+              <label class="status-option"><input type="checkbox" name="statusFilter" value="processing" /> Processing</label>
+              <label class="status-option"><input type="checkbox" name="statusFilter" value="completed" /> Completed</label>
+              <label class="status-option"><input type="checkbox" name="statusFilter" value="error" /> Error</label>
+            </div>
+          </fieldset>
+        </div>
+        <div class="filter-toggles">
+          <label class="filter-toggle"><input type="checkbox" id="filterEmailsOnly" /> Emails only</label>
+          <label class="filter-toggle"><input type="checkbox" id="filterUniqueEmails" disabled /> Unique emails</label>
+          <label class="filter-toggle"><input type="checkbox" id="filterEmailGateOnly" /> Email gate only</label>
+        </div>
+      </section>
+
+      <section class="table-panel">
+        <div class="table-header">
+          <div>
+            <h2 id="tableTitle">Active channels</h2>
+            <p class="table-subtitle" id="tableSubtitle">Fresh leads waiting for outreach.</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn--yellow" id="bulkPrimaryBtn">🟡 Archive (filtered)</button>
+            <button class="btn btn--red" id="bulkSecondaryBtn">🔴 Blacklist (filtered)</button>
+          </div>
+        </div>
+        <div class="table-toolbar">
+          <div class="table-sort">
+            <label for="sortSelect">Sort</label>
+            <select id="sortSelect">
+              <option value="created_at">Newest</option>
+              <option value="name">Name</option>
+              <option value="subscribers">Subscribers</option>
+              <option value="language">Language</option>
+              <option value="last_updated">Last updated</option>
+              <option value="exported_at">Exported</option>
+              <option value="archived_at">Archived</option>
+              <option value="status">Status</option>
+              <option value="last_status_change">Status change</option>
+            </select>
+            <label for="orderSelect">Order</label>
+            <select id="orderSelect">
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </div>
+          <div class="table-meta" id="tableStatus"></div>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Subscribers</th>
+                <th>Language</th>
+                <th>Emails</th>
+                <th>Status</th>
+                <th>Last updated</th>
+                <th>Exported</th>
+                <th>Archived</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody">
+              <tr>
+                <td colspan="9" class="table-loading">Loading channels…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button class="btn btn--outline" id="prevPageBtn">← Previous</button>
+          <span id="paginationLabel">Page 1 of 1</span>
+          <button class="btn btn--outline" id="nextPageBtn">Next →</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal" id="discoverSettingsModal" hidden>
+      <div
+        class="modal-content modal-content--wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="discoverSettingsTitle"
+      >
+        <div class="modal-header">
+          <h2 id="discoverSettingsTitle">Discover settings</h2>
+          <button type="button" class="modal-close" id="discoverSettingsCloseBtn" aria-label="Close">×</button>
+        </div>
+        <form class="modal-body discover-modal-body" id="discoverSettingsForm">
+          <section class="modal-section">
+            <h3 class="modal-section__title">Keywords</h3>
+            <div class="modal-field">
+              <label for="discoverKeywords">Discovery keywords</label>
+              <textarea id="discoverKeywords" rows="6" spellcheck="false"></textarea>
+              <p class="modal-hint">Enter one keyword per line or separate them with commas.</p>
+            </div>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Limits &amp; filters</h3>
+            <div class="modal-grid">
+              <div class="modal-field">
+                <label for="discoverPerKeyword">Per keyword</label>
+                <input type="number" id="discoverPerKeyword" min="1" />
+              </div>
+              <div class="modal-field">
+                <label for="discoverLastUploadMaxAge">Last upload max age (days)</label>
+                <input type="number" id="discoverLastUploadMaxAge" min="0" placeholder="No limit" />
+              </div>
+              <div class="modal-field modal-field--full">
+                <label for="discoverDenyLanguages">Deny languages</label>
+                <input
+                  type="text"
+                  id="discoverDenyLanguages"
+                  placeholder="e.g. de, fr, ru"
+                  spellcheck="false"
+                />
+                <p class="modal-hint">Comma separated language codes. Leave blank to allow all.</p>
+              </div>
+            </div>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Automation</h3>
+            <div class="modal-switches">
+              <label class="modal-toggle">
+                <input type="checkbox" id="discoverRunUntilStopped" /> Run until stopped
+              </label>
+              <div class="modal-field modal-field--inline">
+                <label class="modal-toggle">
+                  <input type="checkbox" id="discoverAutoEnrichToggle" /> Auto-enrich discovered channels
+                </label>
+                <select id="discoverAutoEnrichMode">
+                  <option value="email_only">Email only</option>
+                  <option value="full">Normal</option>
+                </select>
+                <p class="modal-hint">Choose how auto-enrich runs after each discovery.</p>
+              </div>
+              <div class="modal-field">
+                <label for="enrichLimit">Enrich limit (optional)</label>
+                <input type="number" id="enrichLimit" min="1" placeholder="No limit" />
+              </div>
+            </div>
+          </section>
+        </form>
+        <div class="modal-footer">
+          <button type="button" class="btn btn--outline" id="discoverSettingsCancelBtn">Cancel</button>
+          <button type="submit" form="discoverSettingsForm" class="btn btn--green" id="discoverSettingsStartBtn">
+            <span class="btn-icon">🔍</span>Start discovery
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="blacklistModal" hidden>
+      <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="blacklistTitle">
+        <div class="modal-header">
+          <h2 id="blacklistTitle">Import blacklist</h2>
+          <button type="button" class="modal-close" id="blacklistCloseBtn" aria-label="Close">×</button>
+        </div>
+        <form class="modal-body" id="blacklistForm">
+          <div class="modal-field">
+            <label for="blacklistFile">CSV file</label>
+            <input type="file" id="blacklistFile" accept=".csv,text/csv" required />
+            <p class="modal-hint">Accepted columns: <code>channel_id</code> or <code>url</code>. Additional columns are ignored.</p>
+          </div>
+          <div class="modal-actions">
+            <button type="submit" class="btn btn--red" id="blacklistSubmitBtn">Import</button>
+            <button type="button" class="btn btn--outline" id="blacklistCancelBtn">Cancel</button>
+          </div>
+        </form>
+        <div class="modal-summary" id="blacklistSummary"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
