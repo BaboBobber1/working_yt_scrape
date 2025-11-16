@@ -357,6 +357,7 @@ class Dashboard {
     this.discoveryLoopCompletionPayload = null;
     this.finalizingDiscoveryLoop = false;
     this.discoveryLoopCompletionSent = false;
+    this.enrichmentDialogMode = 'job';
   }
 
   init() {
@@ -427,6 +428,8 @@ class Dashboard {
       enrichSettingsClose: document.getElementById('enrichSettingsCloseBtn'),
       enrichSettingsCancel: document.getElementById('enrichSettingsCancelBtn'),
       enrichSettingsForm: document.getElementById('enrichSettingsForm'),
+      enrichSettingsStart: document.getElementById('enrichSettingsStartBtn'),
+      enrichScopeSection: document.getElementById('enrichScopeSection'),
       enrichScopeFiltered: document.getElementById('enrichScopeFiltered'),
       enrichScopeAll: document.getElementById('enrichScopeAllActive'),
       enrichEmailsEnabled: document.getElementById('enrichEmailsEnabled'),
@@ -552,7 +555,7 @@ class Dashboard {
 
     this.el.enrichBtn.addEventListener('click', (event) => {
       event.preventDefault();
-      this.openEnrichmentSettings();
+      this.openEnrichmentSettings('job');
     });
     this.el.enrichSettingsClose?.addEventListener('click', () => this.closeEnrichmentSettings());
     this.el.enrichSettingsCancel?.addEventListener('click', () => this.closeEnrichmentSettings());
@@ -575,7 +578,7 @@ class Dashboard {
 
     this.el.discoverOpenEnrichmentSettings?.addEventListener('click', (event) => {
       event.preventDefault();
-      this.openEnrichmentSettings();
+      this.openEnrichmentSettings('config');
     });
 
     this.el.discoverSettingsClose?.addEventListener('click', () => this.closeDiscoverSettings());
@@ -858,11 +861,27 @@ class Dashboard {
     }
   }
 
-  async openEnrichmentSettings() {
+  setEnrichmentDialogMode(mode = 'job') {
+    this.enrichmentDialogMode = mode === 'config' ? 'config' : 'job';
+    const configMode = this.enrichmentDialogMode === 'config';
+
+    if (this.el.enrichScopeSection) {
+      this.el.enrichScopeSection.hidden = configMode;
+    }
+
+    if (this.el.enrichSettingsStart) {
+      this.el.enrichSettingsStart.innerHTML = configMode
+        ? '<span class="btn-icon">💾</span>Save settings'
+        : '<span class="btn-icon">⚙️</span>Start enrichment';
+    }
+  }
+
+  async openEnrichmentSettings(mode = 'job') {
     if (!this.el.enrichSettingsModal) {
       return;
     }
     this.closeAllDropdowns();
+    this.setEnrichmentDialogMode(mode);
     await this.refreshEnrichmentSettings();
     this.populateEnrichmentSettingsForm();
     this.el.enrichSettingsModal.hidden = false;
@@ -875,6 +894,7 @@ class Dashboard {
     }
     this.el.enrichSettingsModal.hidden = true;
     this.el.enrichSettingsModal.setAttribute('aria-hidden', 'true');
+    this.setEnrichmentDialogMode('job');
   }
 
   openDiscoverSettings() {
@@ -1843,8 +1863,16 @@ class Dashboard {
       this.updateStatusBar('Failed to save enrichment settings.', 'error');
       return;
     }
+    const configMode = this.enrichmentDialogMode === 'config';
     this.updateEnrichmentLastUsed();
+    this.updateDiscoverySummary();
     this.closeEnrichmentSettings();
+
+    if (configMode) {
+      this.updateStatusBar('Enrichment settings saved.', 'success');
+      return;
+    }
+
     await this.handleEnrich(this.enrichmentSettings.options, {
       scope,
       emailMode: this.enrichmentSettings.emailMode,
