@@ -213,7 +213,12 @@ class EnrichmentManager:
             filters=filters,
             limit=limit,
         )
-        filtered, skipped = self._filter_channels(channels, force_run=force_run, never_reenrich=never_reenrich)
+        filtered, skipped = self._filter_channels(
+            channels,
+            options=effective_options,
+            force_run=force_run,
+            never_reenrich=never_reenrich,
+        )
         job_id = str(uuid.uuid4())
         job = EnrichmentJob(
             job_id=job_id,
@@ -241,6 +246,7 @@ class EnrichmentManager:
         self,
         channels: List[Dict],
         *,
+        options: EnrichmentOptions,
         force_run: bool,
         never_reenrich: bool,
     ) -> Tuple[List[Dict], List[Dict]]:
@@ -258,7 +264,7 @@ class EnrichmentManager:
             else:
                 last_result = str(channel.get("last_enriched_result") or "").lower()
                 if last_result == "no_emails" and last_enriched_at:
-                    if now - last_enriched_at < NO_EMAIL_RETRY_WINDOW:
+                    if now - last_enriched_at < NO_EMAIL_RETRY_WINDOW and not options.telegram_enrichment:
                         should_skip = True
             if should_skip:
                 skipped.append(channel)
@@ -401,6 +407,9 @@ class EnrichmentManager:
             else None
         )
         telegram_account = enriched.get("telegram_account")
+        telegram_value = (
+            telegram_account if telegram_account is not None else "" if job.options.telegram_enrichment else None
+        )
         result_value = None
         if job.options.emails_from_channel or job.options.emails_from_videos:
             result_value = "emails_found" if enriched_emails else "no_emails"
@@ -423,7 +432,7 @@ class EnrichmentManager:
             language=language_value,
             language_confidence=language_confidence,
             emails=emails,
-            telegram_account=telegram_account,
+            telegram_account=telegram_value,
             email_gate_present=email_gate_present,
             last_updated=enriched.get("last_updated") if job.options.update_activity else None,
             last_attempted=success_time,
@@ -448,7 +457,7 @@ class EnrichmentManager:
                 "language": language_value,
                 "languageConfidence": language_confidence,
                 "emails": enriched_emails,
-                "telegramAccount": telegram_account,
+                "telegramAccount": telegram_value,
                 "lastUpdated": enriched.get("last_updated") if job.options.update_activity else None,
                 "emailGatePresent": email_gate_present,
                 "mode": job.mode,
@@ -467,9 +476,10 @@ class EnrichmentManager:
         display_emails: List[str] = list(parsed_emails)
         if not display_emails and stored_emails:
             display_emails = sorted(stored_emails)
-        should_skip = bool(stored_emails)
+        telegram_requested = job.options.telegram_enrichment
+        should_skip = not telegram_requested and bool(stored_emails)
         if not should_skip and display_emails:
-            should_skip = database.has_all_known_emails(display_emails)
+            should_skip = not telegram_requested and database.has_all_known_emails(display_emails)
         if should_skip:
             if display_emails:
                 database.record_channel_emails(channel_id, display_emails, start_time)
@@ -483,7 +493,7 @@ class EnrichmentManager:
                     email_gate_present=False,
                     last_enriched_at=start_time if display_emails or stored_emails else None,
                     last_enriched_result="emails_found" if display_emails or stored_emails else None,
-                    telegram_account=None,
+                    telegram_account="" if telegram_requested else None,
                 )
             job.update_counts(completed=True)
             job.push_update(
@@ -496,7 +506,7 @@ class EnrichmentManager:
                     "emails": display_emails,
                     "lastUpdated": channel.get("last_updated") or start_time,
                     "emailGatePresent": False,
-                    "telegramAccount": None,
+                    "telegramAccount": "" if telegram_requested else None,
                     "mode": job.mode,
                 }
             )
@@ -572,6 +582,9 @@ class EnrichmentManager:
         last_updated = enriched.get("last_updated") or success_time
         email_gate_present = enriched.get("email_gate_present")
         telegram_account = enriched.get("telegram_account")
+        telegram_value = (
+            telegram_account if telegram_account is not None else "" if job.options.telegram_enrichment else None
+        )
         result_value = "emails_found" if emails else "no_emails"
         database.update_channel_enrichment(
             channel_id,
@@ -580,7 +593,7 @@ class EnrichmentManager:
             email_gate_present=email_gate_present,
             last_enriched_at=success_time,
             last_enriched_result=result_value,
-            telegram_account=telegram_account,
+            telegram_account=telegram_value,
         )
 
         job.update_counts(completed=True)
@@ -594,7 +607,7 @@ class EnrichmentManager:
                 "emails": emails,
                 "lastUpdated": last_updated,
                 "emailGatePresent": email_gate_present,
-                "telegramAccount": telegram_account,
+                "telegramAccount": telegram_value,
                 "mode": job.mode,
             }
         )
