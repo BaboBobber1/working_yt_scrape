@@ -13,8 +13,19 @@
           <h1>Crypto YouTube Harvester</h1>
           <p class="app-tagline">Organize, filter and manage outreach-ready channels.</p>
         </div>
-        <div class="quick-stats" id="quickStats">
-          <span class="quick-stats__loading">Loading stats…</span>
+        <div class="header-actions">
+          <button
+            type="button"
+            class="icon-button help-button"
+            id="helpBtn"
+            aria-label="Open in-app documentation"
+            title="Open in-app documentation"
+          >
+            ℹ️
+          </button>
+          <div class="quick-stats" id="quickStats">
+            <span class="quick-stats__loading">Loading stats…</span>
+          </div>
         </div>
       </header>
 
@@ -193,6 +204,99 @@
           <button class="btn btn--outline" id="nextPageBtn">Next →</button>
         </div>
       </section>
+    </div>
+
+    <div class="modal" id="helpModal" hidden aria-hidden="true">
+      <div
+        class="modal-content modal-content--wide modal-content--tall"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="helpModalTitle"
+      >
+        <div class="modal-header">
+          <div class="modal-header__text">
+            <h2 id="helpModalTitle">System guide</h2>
+            <p class="modal-subtitle">How discovery, enrichment and automation work under the hood.</p>
+          </div>
+          <button type="button" class="modal-close" id="helpModalClose" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body modal-body--scroll">
+          <section class="modal-section">
+            <h3 class="modal-section__title">Overview</h3>
+            <p>
+              Crypto YouTube Harvester is a single-page dashboard that discovers crypto-focused YouTube channels,
+              enriches them with language + email intel, and organizes them into active, archived and blacklisted
+              collections. Everything runs locally through the bundled FastAPI backend and SQLite database.
+            </p>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Discovery workflow</h3>
+            <ul>
+              <li>Keywords are expanded line-by-line (commas are also accepted) and normalized before each run.</li>
+              <li>Each keyword triggers paginated YouTube searches; paging tokens and page indexes are persisted per keyword so reruns continue where they left off.</li>
+              <li>Optional limits include <em>per keyword</em> result caps, deny-language lists, and "last upload max age" (skips channels with stale activity).</li>
+              <li>Discovery can run once or continuously via "run until stopped"; continuous mode stops if several pages return no new channels or when safety caps are hit.</li>
+              <li>Channel references are sanitized (IDs, handles, user/c paths, hyperlinks) and resolved to canonical URLs + IDs before they are accepted.</li>
+              <li>Duplicates are rejected across all categories (active, archived, blacklisted) so the dataset stays unique.</li>
+              <li>When auto-enrich is enabled, newly discovered channels immediately queue enrichment with the selected mode (email-only or full).</li>
+            </ul>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Channel states &amp; categories</h3>
+            <ul>
+              <li>Logical collections: <strong>Active</strong> (default), <strong>Archived</strong> (paused/finished), and <strong>Blacklisted</strong> (hidden from future discovery).</li>
+              <li>Status flags per channel: <code>new</code>, <code>processing</code>, <code>completed</code>, or <code>error</code>, plus timestamps for the last status change and enrichment attempts.</li>
+              <li>Archiving/blacklisting moves rows between dedicated tables while preserving metadata, emails, and timestamps.</li>
+              <li>Exported timestamps mark when a channel left the dashboard via CSV/bundle download.</li>
+            </ul>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Enrichment pipeline</h3>
+            <ul>
+              <li>Jobs run in batches (configurable limit) and stream live progress via server-sent events; the UI shows totals, errors, and pending counts.</li>
+              <li>Modes: <strong>Full</strong> (emails from channel + recent videos, precise + fast language detection, metadata + activity refresh) or <strong>Email-only</strong> (channel emails only).</li>
+              <li>Language detection uses both quick and precise passes; detection results store a confidence score.</li>
+              <li>Email extraction inspects channel pages and recent video descriptions; a gate flag notes when YouTube hides emails behind a form.</li>
+              <li>Skipped channels: recent "no email" results are remembered for 30 days to avoid redundant work.</li>
+              <li>Scopes: current filter vs all active rows; force-run and "never re-enrich" toggles control whether completed channels are eligible.</li>
+            </ul>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Automation &amp; notifications</h3>
+            <ul>
+              <li>Continuous discovery reports start/stop/progress events to the backend; the UI mirrors counts (runs, new channels) and exposes a stop control.</li>
+              <li>Auto-enrich queues enrichment after each discovery pass and chains additional runs until the queue is drained.</li>
+              <li>System status bar announces the latest action, errors, and completion summaries.</li>
+            </ul>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Filtering, sorting &amp; paging</h3>
+            <ul>
+              <li>Filters include free-text search (name/URL/email), language codes, subscriber min/max, statuses, "emails only", "unique emails", and "email gate only".</li>
+              <li>Sorting covers creation time, name, subscribers, language, last update, export/archival dates, and status timestamps; order can be asc/desc.</li>
+              <li>Pagination uses a fixed page size (default 50) with offset-based navigation; controls update counts and page labels live.</li>
+            </ul>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Data storage &amp; exports</h3>
+            <ul>
+              <li>SQLite database: separate tables per category plus auxiliary tables for blacklist entries and unique email tracking.</li>
+              <li>Channel records capture IDs, canonical URLs, subscribers, language + confidence, email list, gate flag, status metadata, and audit timestamps.</li>
+              <li>Export options: CSV snapshot or project bundle; exports mark rows with an <code>exported_at</code> timestamp.</li>
+              <li>Blacklist import accepts CSVs with <code>channel_id</code> or <code>url</code>; duplicates are skipped and results are summarized in-app.</li>
+            </ul>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Error handling &amp; safeguards</h3>
+            <ul>
+              <li>Invalid inputs (e.g., subscriber ranges, statuses, malformed keywords) return clear validation errors before any work begins.</li>
+              <li>Discovery automatically skips failed keyword pages and resumes later using stored page tokens.</li>
+              <li>Enrichment continues even when individual channels fail; errors are stored per channel and surfaced in the status column.</li>
+              <li>Rate safety: continuous discovery caps pages and new-channel counts per run to prevent runaway loops.</li>
+            </ul>
+          </section>
+        </div>
+      </div>
     </div>
 
     <div class="modal" id="discoverSettingsModal" hidden>

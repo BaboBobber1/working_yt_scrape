@@ -383,6 +383,9 @@ class Dashboard {
   cacheElements() {
     this.el = {
       quickStats: this.root.querySelector('#quickStats'),
+      helpBtn: this.root.querySelector('#helpBtn'),
+      helpModal: document.getElementById('helpModal'),
+      helpModalClose: document.getElementById('helpModalClose'),
       tabButtons: Array.from(this.root.querySelectorAll('[data-category]')),
       tableTitle: this.root.querySelector('#tableTitle'),
       tableSubtitle: this.root.querySelector('#tableSubtitle'),
@@ -463,6 +466,14 @@ class Dashboard {
           this.changeTab(category);
         }
       });
+    });
+
+    this.el.helpBtn?.addEventListener('click', () => this.openHelpModal());
+    this.el.helpModalClose?.addEventListener('click', () => this.closeHelpModal());
+    this.el.helpModal?.addEventListener('click', (event) => {
+      if (event.target === this.el.helpModal) {
+        this.closeHelpModal();
+      }
     });
 
     this.el.sortSelect.addEventListener('change', () => {
@@ -2310,6 +2321,23 @@ class Dashboard {
     }
   }
 
+  openHelpModal() {
+    if (!this.el.helpModal) {
+      return;
+    }
+    this.closeAllDropdowns();
+    this.el.helpModal.hidden = false;
+    this.el.helpModal.setAttribute('aria-hidden', 'false');
+  }
+
+  closeHelpModal() {
+    if (!this.el.helpModal) {
+      return;
+    }
+    this.el.helpModal.hidden = true;
+    this.el.helpModal.setAttribute('aria-hidden', 'true');
+  }
+
   handleDocumentClick(event) {
     if (!this.activeDropdown) {
       return;
@@ -2331,6 +2359,7 @@ class Dashboard {
   handleDocumentKeydown(event) {
     if (event.key === 'Escape') {
       this.closeAllDropdowns();
+      this.closeHelpModal();
     }
   }
 
