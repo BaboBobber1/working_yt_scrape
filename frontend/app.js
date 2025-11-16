@@ -152,6 +152,9 @@ const DEFAULT_DISCOVERY_KEYWORDS =
   'crypto, bitcoin, ethereum, defi, altcoin, memecoin, onchain, crypto trading';
 const ENRICHMENT_SETTINGS_STORAGE_KEY = 'dashboard:enrichmentSettings';
 
+const DEFAULT_EMAIL_MODE = 'channel_and_videos';
+const DEFAULT_LANGUAGE_MODE = 'precise';
+
 function parseDiscoveryKeywords(text) {
   if (!text) {
     return [];
@@ -197,8 +200,67 @@ function emailOnlyEnrichmentOptions() {
 function defaultEnrichmentSettingsState() {
   return {
     scope: 'filtered',
+    emailMode: DEFAULT_EMAIL_MODE,
+    languageMode: DEFAULT_LANGUAGE_MODE,
     options: defaultEnrichmentOptions(),
   };
+}
+
+function emailOptionsFromMode(mode = DEFAULT_EMAIL_MODE) {
+  const normalized = String(mode || DEFAULT_EMAIL_MODE).trim().toLowerCase();
+  switch (normalized) {
+    case 'off':
+      return { emails_from_channel: false, emails_from_videos: false };
+    case 'channel_only':
+      return { emails_from_channel: true, emails_from_videos: false };
+    case 'videos_only':
+      return { emails_from_channel: false, emails_from_videos: true };
+    case 'channel_and_videos':
+    default:
+      return { emails_from_channel: true, emails_from_videos: true };
+  }
+}
+
+function languageOptionsFromMode(mode = DEFAULT_LANGUAGE_MODE) {
+  const normalized = String(mode || DEFAULT_LANGUAGE_MODE).trim().toLowerCase();
+  switch (normalized) {
+    case 'off':
+      return { language_basic: false, language_precise: false };
+    case 'fast':
+      return { language_basic: true, language_precise: false };
+    case 'precise':
+    default:
+      return { language_basic: true, language_precise: true };
+  }
+}
+
+function deriveEmailModeFromOptions(options = defaultEnrichmentOptions()) {
+  if (!options.emails_from_channel && !options.emails_from_videos) {
+    return 'off';
+  }
+  if (options.emails_from_channel && options.emails_from_videos) {
+    return 'channel_and_videos';
+  }
+  if (options.emails_from_channel) {
+    return 'channel_only';
+  }
+  if (options.emails_from_videos) {
+    return 'videos_only';
+  }
+  return DEFAULT_EMAIL_MODE;
+}
+
+function deriveLanguageModeFromOptions(options = defaultEnrichmentOptions()) {
+  if (!options.language_basic && !options.language_precise) {
+    return 'off';
+  }
+  if (options.language_precise) {
+    return 'precise';
+  }
+  if (options.language_basic) {
+    return 'fast';
+  }
+  return DEFAULT_LANGUAGE_MODE;
 }
 
 function normalizeEnrichmentOptions(raw, fallback = defaultEnrichmentOptions()) {
@@ -365,10 +427,10 @@ class Dashboard {
       enrichSettingsForm: document.getElementById('enrichSettingsForm'),
       enrichScopeFiltered: document.getElementById('enrichScopeFiltered'),
       enrichScopeAll: document.getElementById('enrichScopeAllActive'),
-      enrichEmailsChannel: document.getElementById('enrichEmailsChannel'),
-      enrichEmailsVideos: document.getElementById('enrichEmailsVideos'),
-      enrichLanguageBasic: document.getElementById('enrichLanguageBasic'),
-      enrichLanguagePrecise: document.getElementById('enrichLanguagePrecise'),
+      enrichEmailsEnabled: document.getElementById('enrichEmailsEnabled'),
+      enrichEmailsMode: document.getElementById('enrichEmailsMode'),
+      enrichLanguageEnabled: document.getElementById('enrichLanguageEnabled'),
+      enrichLanguageMode: document.getElementById('enrichLanguageMode'),
       enrichUpdateMetadata: document.getElementById('enrichUpdateMetadata'),
       enrichUpdateActivity: document.getElementById('enrichUpdateActivity'),
       enrichLimit: document.getElementById('enrichLimit'),
@@ -493,6 +555,13 @@ class Dashboard {
       event.preventDefault();
       await this.handleEnrichmentSettingsSubmit();
     });
+
+    this.el.enrichEmailsEnabled?.addEventListener('change', () =>
+      this.updateEnrichmentModeControls(),
+    );
+    this.el.enrichLanguageEnabled?.addEventListener('change', () =>
+      this.updateEnrichmentModeControls(),
+    );
 
     this.el.discoverAutoEnrichToggle?.addEventListener('change', () => {
       if (this.el.discoverAutoEnrichMode) {
@@ -659,7 +728,31 @@ class Dashboard {
     const defaults = defaultEnrichmentSettingsState();
     const scope = raw.scope === 'all_active' ? 'all_active' : 'filtered';
     const options = normalizeEnrichmentOptions(raw.options, defaults.options);
-    return { scope, options };
+    const emailMode =
+      typeof raw.emailMode === 'string'
+        ? raw.emailMode
+        : typeof raw.email_mode === 'string'
+        ? raw.email_mode
+        : deriveEmailModeFromOptions(options);
+    const languageMode =
+      typeof raw.languageMode === 'string'
+        ? raw.languageMode
+        : typeof raw.language_mode === 'string'
+        ? raw.language_mode
+        : deriveLanguageModeFromOptions(options);
+
+    const mergedOptions = {
+      ...options,
+      ...emailOptionsFromMode(emailMode),
+      ...languageOptionsFromMode(languageMode),
+    };
+
+    return {
+      scope,
+      emailMode: emailMode || DEFAULT_EMAIL_MODE,
+      languageMode: languageMode || DEFAULT_LANGUAGE_MODE,
+      options: mergedOptions,
+    };
   }
 
   saveEnrichmentSettings() {
@@ -747,23 +840,41 @@ class Dashboard {
     if (this.el.enrichScopeAll) {
       this.el.enrichScopeAll.checked = settings.scope === 'all_active';
     }
-    if (this.el.enrichEmailsChannel) {
-      this.el.enrichEmailsChannel.checked = Boolean(settings.options.emails_from_channel);
+    if (this.el.enrichEmailsEnabled) {
+      this.el.enrichEmailsEnabled.checked = settings.emailMode !== 'off';
     }
-    if (this.el.enrichEmailsVideos) {
-      this.el.enrichEmailsVideos.checked = Boolean(settings.options.emails_from_videos);
+    if (this.el.enrichEmailsMode) {
+      this.el.enrichEmailsMode.value = settings.emailMode || DEFAULT_EMAIL_MODE;
     }
-    if (this.el.enrichLanguageBasic) {
-      this.el.enrichLanguageBasic.checked = Boolean(settings.options.language_basic);
+    if (this.el.enrichLanguageEnabled) {
+      this.el.enrichLanguageEnabled.checked = settings.languageMode !== 'off';
     }
-    if (this.el.enrichLanguagePrecise) {
-      this.el.enrichLanguagePrecise.checked = Boolean(settings.options.language_precise);
+    if (this.el.enrichLanguageMode) {
+      this.el.enrichLanguageMode.value = settings.languageMode || DEFAULT_LANGUAGE_MODE;
     }
     if (this.el.enrichUpdateMetadata) {
       this.el.enrichUpdateMetadata.checked = Boolean(settings.options.update_metadata);
     }
     if (this.el.enrichUpdateActivity) {
       this.el.enrichUpdateActivity.checked = Boolean(settings.options.update_activity);
+    }
+    this.updateEnrichmentModeControls();
+  }
+
+  updateEnrichmentModeControls() {
+    if (this.el.enrichEmailsMode) {
+      this.el.enrichEmailsMode.disabled = !this.el.enrichEmailsEnabled?.checked;
+      this.el.enrichEmailsMode.closest('.modal-select')?.classList.toggle(
+        'modal-select--disabled',
+        !this.el.enrichEmailsEnabled?.checked,
+      );
+    }
+    if (this.el.enrichLanguageMode) {
+      this.el.enrichLanguageMode.disabled = !this.el.enrichLanguageEnabled?.checked;
+      this.el.enrichLanguageMode.closest('.modal-select')?.classList.toggle(
+        'modal-select--disabled',
+        !this.el.enrichLanguageEnabled?.checked,
+      );
     }
   }
 
@@ -1733,19 +1844,28 @@ class Dashboard {
 
   async handleEnrichmentSettingsSubmit() {
     const scope = this.el.enrichScopeAll?.checked ? 'all_active' : 'filtered';
+    const emailMode = this.el.enrichEmailsEnabled?.checked
+      ? this.el.enrichEmailsMode?.value || DEFAULT_EMAIL_MODE
+      : 'off';
+    const languageMode = this.el.enrichLanguageEnabled?.checked
+      ? this.el.enrichLanguageMode?.value || DEFAULT_LANGUAGE_MODE
+      : 'off';
     const options = {
-      emails_from_channel: Boolean(this.el.enrichEmailsChannel?.checked),
-      emails_from_videos: Boolean(this.el.enrichEmailsVideos?.checked),
-      language_basic: Boolean(this.el.enrichLanguageBasic?.checked),
-      language_precise: Boolean(this.el.enrichLanguagePrecise?.checked),
+      ...emailOptionsFromMode(emailMode),
+      ...languageOptionsFromMode(languageMode),
       update_metadata: Boolean(this.el.enrichUpdateMetadata?.checked),
       update_activity: Boolean(this.el.enrichUpdateActivity?.checked),
     };
-    this.enrichmentSettings = this.normalizeEnrichmentSettings({ scope, options });
+    this.enrichmentSettings = this.normalizeEnrichmentSettings({
+      scope,
+      options,
+      emailMode,
+      languageMode,
+    });
     this.saveEnrichmentSettings();
     this.updateEnrichmentLastUsed();
     this.closeEnrichmentSettings();
-    await this.handleEnrich(options, { scope });
+    await this.handleEnrich(options, { scope, emailMode, languageMode });
   }
 
   async handleEnrich(options, overrides = {}) {
@@ -1767,6 +1887,14 @@ class Dashboard {
     const appliedOptions = normalizeEnrichmentOptions(
       options || this.enrichmentSettings?.options || defaultEnrichmentOptions(),
     );
+    const emailMode =
+      overrides.emailMode ||
+      this.enrichmentSettings?.emailMode ||
+      deriveEmailModeFromOptions(appliedOptions);
+    const languageMode =
+      overrides.languageMode ||
+      this.enrichmentSettings?.languageMode ||
+      deriveLanguageModeFromOptions(appliedOptions);
     const scope = scopeOverride || this.enrichmentSettings?.scope || 'filtered';
 
     try {
@@ -1777,6 +1905,8 @@ class Dashboard {
       const request = {
         limit: limitValue,
         options: appliedOptions,
+        emails_mode: emailMode,
+        language_mode: languageMode,
         scope,
         category: this.activeTab,
         forceRun: this.el.enrichForceToggle?.checked ?? false,

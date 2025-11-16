@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import database
@@ -54,6 +54,38 @@ class EnrichmentOptions:
             update_metadata=bool(payload.get("update_metadata", True)),
             update_activity=bool(payload.get("update_activity", True)),
         )
+
+    @classmethod
+    def with_modes(
+        cls,
+        *,
+        base: Optional["EnrichmentOptions"] = None,
+        emails_mode: Optional[str] = None,
+        language_mode: Optional[str] = None,
+    ) -> "EnrichmentOptions":
+        options = base or cls.full()
+
+        normalized_email_mode = (emails_mode or "").strip().lower()
+        if normalized_email_mode:
+            if normalized_email_mode == "off":
+                options = replace(options, emails_from_channel=False, emails_from_videos=False)
+            elif normalized_email_mode == "channel_only":
+                options = replace(options, emails_from_channel=True, emails_from_videos=False)
+            elif normalized_email_mode == "channel_and_videos":
+                options = replace(options, emails_from_channel=True, emails_from_videos=True)
+            elif normalized_email_mode == "videos_only":
+                options = replace(options, emails_from_channel=False, emails_from_videos=True)
+
+        normalized_language_mode = (language_mode or "").strip().lower()
+        if normalized_language_mode:
+            if normalized_language_mode == "off":
+                options = replace(options, language_basic=False, language_precise=False)
+            elif normalized_language_mode == "fast":
+                options = replace(options, language_basic=True, language_precise=False)
+            elif normalized_language_mode == "precise":
+                options = replace(options, language_basic=True, language_precise=True)
+
+        return options
 
     def mode_label(self) -> str:
         if self == self.full():

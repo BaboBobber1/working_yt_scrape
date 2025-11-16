@@ -766,6 +766,20 @@ a:hover {
   margin: 0;
 }
 
+.modal-select {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-select select {
+  margin-left: auto;
+  min-width: 260px;
+}
+
+.modal-select--disabled {
+  opacity: 0.6;
+}
+
 .modal-field input[type='file'] {
   cursor: pointer;
 }
