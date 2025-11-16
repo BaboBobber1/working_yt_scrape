@@ -295,6 +295,130 @@
               <li>Rate safety: continuous discovery caps pages and new-channel counts per run to prevent runaway loops.</li>
             </ul>
           </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">FAQ / Q&amp;A</h3>
+            <div class="accordion" role="list">
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Wie funktioniert Discovery intern?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Pro Keyword wird direkt die YouTube-Suche mit Channel-Filter (<code>sp=EgIQAg%3D%3D</code>) aufgerufen; es werden ausschließlich Kanäle geholt, keine Videos. Treffer werden normalisiert (ID, Handle, /c-/user-Pfade) und gegen Blacklist + bestehende Daten geprüft, bevor sie gespeichert werden.
+                  </p>
+                  <p>
+                    Für Deny-Languages und „Last upload max age“ wird vor dem Einfügen ein leichtgewichtiges RSS/Watch-Metadataset geladen, um Sprache und letztes Upload-Datum zu bestimmen; Verstöße werden sofort geblacklistet und nicht übernommen.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Wie werden Keywords ausgewertet?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Keywords werden im Dialog zeilen- oder kommasepariert erfasst, getrimmt und ohne weitere Aufsplittung an die YouTube-Suche übergeben. Dadurch wird nach Kanälen gesucht, deren Name/Beschreibung/Tags auf die ganze Phrase matchen; längere Phrasen funktionieren, liefern aber oft weniger Seiten als kürzere, generische Begriffe.
+                  </p>
+                  <p>
+                    Da ausschließlich Kanal-Suchergebnisse verarbeitet werden, kommen Treffer nicht aus Videolisten und werden auch nicht erst aus Video-Treffern auf Kanäle rückgeschlossen.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Was bedeutet „Per keyword“ im Discover-Dialog?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Der Wert begrenzt pro Keyword, wie viele neue Kanäle pro Run geholt und gespeichert werden. Im Standardlauf stoppt Discovery pro Keyword, sobald die Zahl erreicht ist. In „Run until stopped“ wird das Limit zusätzlich durch Sicherheitskappen gedeckelt (max. 200 neue Kanäle bzw. 20 Seiten pro Run) und nach jeder Seite mit einem persistierten Page-Token fortgeführt.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Was macht „Run until stopped“ genau?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Diese Option zwingt Discovery in einen Loop für genau ein Keyword. Pro Durchlauf werden gespeicherte Paging-Offsets, Page-Index und ein „keine neuen Treffer“-Zähler geladen. Der Loop verarbeitet Seiten, bis das Limit erreicht ist, kein Token mehr vorliegt oder mehrere Seiten hintereinander keine neuen Kanäle liefern. Nach jedem Durchlauf werden Offsets und Exhausted-Flags pro Keyword gespeichert; das UI zeigt Runs und New-Counts und lässt den Loop stoppbar weiterlaufen.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Wie funktioniert „Deny languages“?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Für jede Kandidatin wird während der Discovery ein RSS-Feed + jüngstes Video geladen und eine Sprachdetektion über Titel, Beschreibung und Watch-Details gefahren. Treffer mit einer Sprache aus der Deny-Liste werden sofort geblacklistet (inkl. Grund) und gar nicht erst in die Kategorien geschrieben. Der Filter greift damit schon in der Discovery-Phase, bevor späteres Enrichment ins Spiel kommt.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Wie arbeitet Auto-Enrich beim Discovern?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Auto-Enrich nutzt die global gespeicherten Enrichment-Settings (Email-Mode, Language-Mode, Metadata/Activity-Flags) und startet nach jedem Discover-Run automatisch einen Enrich-Job für die neu gefundenen Kanäle (Scope: alle aktiven). Läuft bereits ein Enrichment, werden die Counts gepuffert und nach Abschluss automatisch nachgezogen.</p>
+                  <p>
+                    Limit- und Skip-Logik bleiben erhalten: „Never re-enrich“ respektiert die Checkbox im Discover-Panel, und Channels mit jüngsten „no email“-Ergebnissen werden serverseitig übersprungen.</p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Was ist der Unterschied zwischen „Current filter only“ und „All active channels“ beim Enrich?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    „Current filter only“ übergibt die aktuell angewendeten Tabellenfilter (Suche, Sprache, Status, E-Mail-Flags) an den Enrich-Endpunkt; nur die gefilterte Auswahl wird abgearbeitet. „All active channels“ ignoriert UI-Filter und startet den Job über die gesamte Active-Kategorie. In beiden Fällen steuern die Toggles „Force run“ und „Never re-enrich“, ob bereits angereicherte Kanäle erneut berücksichtigt werden.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Wie funktionieren „Unique emails“ und „Email gate only“?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    „Email gate only“ filtert Tabellenzeilen auf Kanäle mit erkanntem E-Mail-Gate-Flag. „Unique emails“ wird nur aktiv, wenn auch „Emails only“ gesetzt ist; der Backend-Query liefert dann pro E-Mail genau einen Primärkanal (inkl. Verweis auf weitere Vorkommen) aus der aktuellen Kategorie und respektiert dabei Filter wie Sprache oder Status. Archivierte/Blacklisted Channels bleiben damit außen vor, beeinflussen aber weiterhin die globale Unique-E-Mail-Tabelle für spätere Abgleiche.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Was passiert beim Blacklisten / Archivieren?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <p>
+                    Blacklisting verschiebt Kanäle in die Blacklist-Tabelle und markiert sie zusätzlich mit Status „blacklisted“. Discovery prüft diese Tabelle vor jedem Insert und überspringt solche IDs dauerhaft. Archivieren verschiebt Zeilen in die Archiv-Tabelle, behält Metadaten und E-Mails und verhindert doppelte Wiederentdeckungen, da Discovery alle vorhandenen Kanäle (auch archivierte) als „known“ behandelt.
+                  </p>
+                </div>
+              </details>
+              <details class="accordion-item" role="listitem">
+                <summary>
+                  <span class="accordion-title">Gibt es weitere Limits oder Sicherungen?</span>
+                  <span class="accordion-icon" aria-hidden="true">▾</span>
+                </summary>
+                <div class="accordion-content">
+                  <ul>
+                    <li><strong>Enrich limit</strong>: Wenn gesetzt, schränkt Discovery die Auto-Enrich-Queue auf diese Anzahl neuer Kanäle pro Run ein.</li>
+                    <li><strong>Exports/Backups</strong>: CSV-Export markiert Zeilen mit <code>exported_at</code>; Bundle-Export speichert alle Kategorien, Blacklist und Unique-Emails, Bundle-Import stellt diese Strukturen wieder her.</li>
+                    <li><strong>Never re-enrich</strong>: Der Toggle im Discover-Panel wird beim Enrichment-Request mitgeschickt und verhindert, dass kürzlich angereicherte Kanäle erneut gestartet werden.</li>
+                  </ul>
+                </div>
+              </details>
+            </div>
+          </section>
         </div>
       </div>
     </div>
