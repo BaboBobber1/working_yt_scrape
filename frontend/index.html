@@ -139,7 +139,8 @@
         <div class="filter-toggles">
           <label class="filter-toggle"><input type="checkbox" id="filterEmailsOnly" /> Emails only</label>
           <label class="filter-toggle"><input type="checkbox" id="filterUniqueEmails" disabled /> Unique emails</label>
-          <label class="filter-toggle"><input type="checkbox" id="filterEmailGateOnly" /> Email gate only</label>
+          <label class="filter-toggle"><input type="checkbox" id="filterTelegramOnly" /> Has Telegram</label>
+          <label class="filter-toggle" hidden><input type="checkbox" id="filterEmailGateOnly" /> Email gate only</label>
         </div>
       </section>
 
@@ -184,6 +185,7 @@
                 <th>Subscribers</th>
                 <th>Language</th>
                 <th>Emails</th>
+                <th>Telegram</th>
                 <th>Status</th>
                 <th>Last updated</th>
                 <th>Exported</th>
@@ -193,7 +195,7 @@
             </thead>
             <tbody id="tableBody">
               <tr>
-                <td colspan="9" class="table-loading">Loading channels…</td>
+                <td colspan="10" class="table-loading">Loading channels…</td>
               </tr>
             </tbody>
           </table>
@@ -567,6 +569,10 @@
               <label class="modal-toggle">
                 <input type="checkbox" id="enrichUpdateActivity" />
                 Update last upload/activity
+              </label>
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichTelegramEnabled" />
+                Enable Telegram enrichment
               </label>
             </div>
           </section>

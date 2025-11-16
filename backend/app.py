@@ -189,6 +189,7 @@ def _collect_filters(
     include_archived: bool,
     email_gate_only: bool,
     unique_emails: bool,
+    telegram_only: bool,
 ) -> ChannelFilters:
     language_values = [value.lower() for value in _parse_multi(languages) or []] or None
     status_values = [value.lower() for value in _parse_multi(statuses) or []] or None
@@ -217,6 +218,7 @@ def _collect_filters(
         include_archived=include_archived,
         email_gate_only=email_gate_only,
         unique_emails=emails_only and unique_emails,
+        telegram_only=telegram_only,
     )
 
 
@@ -261,6 +263,7 @@ def _collect_filters_from_payload(payload: Optional[Dict[str, Any]]) -> Optional
         include_archived=False,
         email_gate_only=bool(payload.get("emailGateOnly") or payload.get("email_gate_only")),
         unique_emails=bool(payload.get("uniqueEmails") or payload.get("unique_emails")),
+        telegram_only=bool(payload.get("telegramOnly") or payload.get("telegram_only")),
     )
 
 
@@ -396,6 +399,7 @@ def _evaluate_discovery_candidate(
         "last_attempted": None,
         "needs_enrichment": True,
         "emails": None,
+        "telegram_account": None,
         "language": None,
         "language_confidence": None,
         "last_error": None,
@@ -1090,6 +1094,7 @@ def api_channels(
     include_archived: bool = Query(default=False),
     email_gate_only: bool = Query(default=False),
     unique_emails: bool = Query(default=False),
+    telegram_only: bool = Query(default=False),
     category: Optional[str] = Query(default=ChannelCategory.ACTIVE.value),
 ) -> JSONResponse:
     category_value = _parse_category(category)
@@ -1103,6 +1108,7 @@ def api_channels(
         include_archived=include_archived,
         email_gate_only=email_gate_only,
         unique_emails=unique_emails,
+        telegram_only=telegram_only,
     )
     items, total = database.get_channels(
         category_value,
@@ -1140,6 +1146,7 @@ def api_archive_bulk(
     include_archived: bool = Query(default=False),
     email_gate_only: bool = Query(default=False),
     unique_emails: bool = Query(default=False),
+    telegram_only: bool = Query(default=False),
     category: Optional[str] = Query(default=ChannelCategory.ACTIVE.value),
 ) -> JSONResponse:
     category_value = _parse_category(category)
@@ -1169,6 +1176,7 @@ def api_archive_bulk(
             include_archived=include_archived,
             email_gate_only=email_gate_only,
             unique_emails=unique_emails,
+            telegram_only=telegram_only,
         )
         items, _ = database.get_channels(
             category_value,
@@ -1237,6 +1245,7 @@ def api_blacklist_bulk(
     include_archived: bool = Query(default=False),
     email_gate_only: bool = Query(default=False),
     unique_emails: bool = Query(default=False),
+    telegram_only: bool = Query(default=False),
     category: Optional[str] = Query(default=ChannelCategory.ACTIVE.value),
 ) -> JSONResponse:
     category_value = _parse_category(category)
@@ -1262,6 +1271,7 @@ def api_blacklist_bulk(
             include_archived=include_archived,
             email_gate_only=email_gate_only,
             unique_emails=unique_emails,
+            telegram_only=telegram_only,
         )
         items, _ = database.get_channels(
             category_value,
@@ -1314,6 +1324,7 @@ def api_restore_bulk(
     include_archived: bool = Query(default=False),
     email_gate_only: bool = Query(default=False),
     unique_emails: bool = Query(default=False),
+    telegram_only: bool = Query(default=False),
     category: Optional[str] = Query(default=ChannelCategory.ARCHIVED.value),
 ) -> JSONResponse:
     category_value = _parse_category(category)
@@ -1341,6 +1352,7 @@ def api_restore_bulk(
             include_archived=include_archived,
             email_gate_only=email_gate_only,
             unique_emails=unique_emails,
+            telegram_only=telegram_only,
         )
         items, _ = database.get_channels(
             category_value,
@@ -1370,6 +1382,7 @@ def api_export_csv(
     include_archived: bool = Query(default=False),
     unique_emails: bool = Query(default=False),
     email_gate_only: bool = Query(default=False),
+    telegram_only: bool = Query(default=False),
     category: Optional[str] = Query(default=ChannelCategory.ACTIVE.value),
     archive_exported: bool = Query(default=False),
 ) -> PlainTextResponse:
@@ -1384,6 +1397,7 @@ def api_export_csv(
         include_archived=include_archived,
         email_gate_only=email_gate_only,
         unique_emails=unique_emails,
+        telegram_only=telegram_only,
     )
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -1431,6 +1445,7 @@ def api_export_csv(
                 "Subscribers",
                 "Language",
                 "Emails",
+                "Telegram",
                 "Email Gate",
                 "Status",
                 "Last Updated",
@@ -1453,6 +1468,7 @@ def api_export_csv(
                     item.get("subscribers") or "",
                     item.get("language") or "",
                     item.get("emails") or "",
+                    item.get("telegram_account") or "",
                     "Yes"
                     if item.get("email_gate_present")
                     else ("No" if item.get("email_gate_present") == 0 else ""),

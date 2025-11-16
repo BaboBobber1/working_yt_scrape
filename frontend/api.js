@@ -40,6 +40,7 @@ function buildQuery(filters, category, sort, order, limit, page) {
   params.set('emails_only', filters.emailsOnly ? 'true' : 'false');
   params.set('unique_emails', filters.uniqueEmails ? 'true' : 'false');
   params.set('email_gate_only', filters.emailGateOnly ? 'true' : 'false');
+  params.set('telegram_only', filters.telegramOnly ? 'true' : 'false');
   return params.toString();
 }
 

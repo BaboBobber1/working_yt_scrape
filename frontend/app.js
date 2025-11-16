@@ -81,6 +81,7 @@ function defaultFilters() {
     emailsOnly: false,
     uniqueEmails: false,
     emailGateOnly: false,
+    telegramOnly: false,
   };
 }
 
@@ -184,6 +185,7 @@ function defaultEnrichmentOptions() {
     language_precise: true,
     update_metadata: true,
     update_activity: true,
+    telegram_enrichment: true,
   };
 }
 
@@ -195,6 +197,7 @@ function emailOnlyEnrichmentOptions() {
     language_precise: false,
     update_metadata: false,
     update_activity: false,
+    telegram_enrichment: true,
   };
 }
 
@@ -275,6 +278,7 @@ function normalizeEnrichmentOptions(raw, fallback = defaultEnrichmentOptions()) 
     language_precise: Boolean(raw.language_precise ?? fallback.language_precise),
     update_metadata: Boolean(raw.update_metadata ?? fallback.update_metadata),
     update_activity: Boolean(raw.update_activity ?? fallback.update_activity),
+    telegram_enrichment: Boolean(raw.telegram_enrichment ?? fallback.telegram_enrichment),
   };
 }
 
@@ -293,6 +297,9 @@ function describeEnrichmentOptions(options) {
     parts.push('precise language');
   } else if (options.language_basic) {
     parts.push('basic language');
+  }
+  if (options.telegram_enrichment) {
+    parts.push('telegram');
   }
   if (options.update_metadata || options.update_activity) {
     const misc = [];
@@ -438,6 +445,7 @@ class Dashboard {
       enrichLanguageMode: document.getElementById('enrichLanguageMode'),
       enrichUpdateMetadata: document.getElementById('enrichUpdateMetadata'),
       enrichUpdateActivity: document.getElementById('enrichUpdateActivity'),
+      enrichTelegramEnabled: document.getElementById('enrichTelegramEnabled'),
       enrichLimit: document.getElementById('enrichLimit'),
       enrichForceToggle: this.root.querySelector('#enrichForceToggle'),
       enrichNeverToggle: this.root.querySelector('#enrichNeverToggle'),
@@ -456,6 +464,7 @@ class Dashboard {
       filterEmailsOnly: this.root.querySelector('#filterEmailsOnly'),
       filterUniqueEmails: this.root.querySelector('#filterUniqueEmails'),
       filterEmailGateOnly: this.root.querySelector('#filterEmailGateOnly'),
+      filterTelegramOnly: this.root.querySelector('#filterTelegramOnly'),
       filterStatusCheckboxes: Array.from(this.root.querySelectorAll('input[name="statusFilter"]')),
     };
   }
@@ -505,6 +514,7 @@ class Dashboard {
     });
     this.el.filterUniqueEmails.addEventListener('change', scheduleFilters);
     this.el.filterEmailGateOnly.addEventListener('change', scheduleFilters);
+    this.el.filterTelegramOnly.addEventListener('change', scheduleFilters);
     this.el.filterStatusCheckboxes.forEach((checkbox) => {
       checkbox.addEventListener('change', scheduleFilters);
     });
@@ -841,6 +851,9 @@ class Dashboard {
     if (this.el.enrichUpdateActivity) {
       this.el.enrichUpdateActivity.checked = Boolean(settings.options.update_activity);
     }
+    if (this.el.enrichTelegramEnabled) {
+      this.el.enrichTelegramEnabled.checked = Boolean(settings.options.telegram_enrichment);
+    }
     this.updateEnrichmentModeControls();
   }
 
@@ -1067,6 +1080,7 @@ class Dashboard {
     this.el.filterUniqueEmails.checked = Boolean(filters.uniqueEmails);
     this.el.filterUniqueEmails.disabled = !filters.emailsOnly;
     this.el.filterEmailGateOnly.checked = Boolean(filters.emailGateOnly);
+    this.el.filterTelegramOnly.checked = Boolean(filters.telegramOnly);
     this.el.filterStatusCheckboxes.forEach((checkbox) => {
       checkbox.checked = filters.statuses.includes(checkbox.value);
     });
@@ -1435,7 +1449,7 @@ class Dashboard {
     });
 
     if (loadingState) {
-      this.el.tableBody.innerHTML = '<tr><td colspan="9" class="table-loading">Loading channels…</td></tr>';
+      this.el.tableBody.innerHTML = '<tr><td colspan="10" class="table-loading">Loading channels…</td></tr>';
       return;
     }
 
@@ -1443,12 +1457,12 @@ class Dashboard {
       if (this.el.tableStatus) {
         this.el.tableStatus.textContent = 'Failed to load channels';
       }
-      this.el.tableBody.innerHTML = `<tr><td colspan="9" class="table-error">${table.error}</td></tr>`;
+      this.el.tableBody.innerHTML = `<tr><td colspan="10" class="table-error">${table.error}</td></tr>`;
       return;
     }
 
     if (!table.rows.length) {
-    this.el.tableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No channels match the current filters.</td></tr>';
+    this.el.tableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No channels match the current filters.</td></tr>';
       return;
     }
 
@@ -1493,6 +1507,10 @@ class Dashboard {
     const name = escapeHtml(row.name || 'Unnamed channel');
     const channelId = escapeHtml(row.channel_id);
     const emails = row.emails ? escapeHtml(row.emails) : '—';
+    const telegramUsername = row.telegram_account ? escapeHtml(row.telegram_account) : '';
+    const telegramLink = telegramUsername
+      ? `<a href="https://t.me/${telegramUsername}" target="_blank" rel="noopener noreferrer">@${telegramUsername}</a>`
+      : '—';
     const reason = statusReason ? escapeHtml(statusReason) : '';
     const emailGate = Boolean(row.email_gate_present);
     const duplicateCount = Number(row.duplicate_email_count || 0);
@@ -1521,6 +1539,7 @@ class Dashboard {
         <td>${subscribers}</td>
         <td>${language}</td>
         <td class="emails-cell">${emails}</td>
+        <td class="telegram-cell">${telegramLink}</td>
         <td>
           <span class="status-chip ${badgeClass}">${badgeIcon} ${escapeHtml(statusText)}</span>
           ${reason ? `<span class="status-reason">${reason}</span>` : ''}
@@ -1551,6 +1570,7 @@ class Dashboard {
       emailsOnly: this.el.filterEmailsOnly.checked,
       uniqueEmails: this.el.filterUniqueEmails.checked,
       emailGateOnly: this.el.filterEmailGateOnly.checked,
+      telegramOnly: this.el.filterTelegramOnly.checked,
       statuses: this.el.filterStatusCheckboxes.filter((c) => c.checked).map((c) => c.value),
     };
     this.tables[this.activeTab].filters = filters;
@@ -1845,6 +1865,7 @@ class Dashboard {
       ...languageOptionsFromMode(languageMode),
       update_metadata: Boolean(this.el.enrichUpdateMetadata?.checked),
       update_activity: Boolean(this.el.enrichUpdateActivity?.checked),
+      telegram_enrichment: Boolean(this.el.enrichTelegramEnabled?.checked),
     };
     this.enrichmentSettings = this.normalizeEnrichmentSettings({
       scope,

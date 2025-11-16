@@ -66,7 +66,7 @@ class DiscoveryKeywordState:
     no_new_pages: int
     updated_at: Optional[str]
 
-PROJECT_BUNDLE_SCHEMA_VERSION = 1
+PROJECT_BUNDLE_SCHEMA_VERSION = 2
 
 DEFAULT_ENRICHMENT_CONFIG = {
     "emails_from_channel": True,
@@ -75,6 +75,7 @@ DEFAULT_ENRICHMENT_CONFIG = {
     "language_precise": True,
     "update_metadata": True,
     "update_activity": True,
+    "telegram_enrichment": True,
 }
 
 CHANNEL_COLUMNS = [
@@ -85,6 +86,7 @@ CHANNEL_COLUMNS = [
     "language",
     "language_confidence",
     "emails",
+    "telegram_account",
     "email_gate_present",
     "last_updated",
     "created_at",
@@ -162,6 +164,7 @@ def init_db() -> None:
                     last_attempted TEXT,
                     last_enriched_at TEXT,
                     last_enriched_result TEXT,
+                    telegram_account TEXT,
                     needs_enrichment INTEGER NOT NULL DEFAULT 1,
                     last_error TEXT,
                     status TEXT NOT NULL DEFAULT 'new',
@@ -175,6 +178,7 @@ def init_db() -> None:
             _ensure_column(cursor, table, "email_gate_present", "INTEGER")
             _ensure_column(cursor, table, "last_enriched_at", "TEXT")
             _ensure_column(cursor, table, "last_enriched_result", "TEXT")
+            _ensure_column(cursor, table, "telegram_account", "TEXT")
             _ensure_column(cursor, table, "archived_at", "TEXT")
             _ensure_column(cursor, table, "exported_at", "TEXT")
             cursor.execute(
@@ -302,6 +306,7 @@ class ChannelFilters:
     include_archived: bool = False
     email_gate_only: bool = False
     unique_emails: bool = False
+    telegram_only: bool = False
 
 
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -901,6 +906,7 @@ def update_channel_enrichment(
     language: Optional[str] = None,
     language_confidence: Optional[float] = None,
     emails: Optional[str] = None,
+    telegram_account: Optional[str] = None,
     email_gate_present: Optional[bool] = None,
     last_updated: Optional[str] = None,
     last_attempted: Optional[str] = None,
@@ -923,6 +929,8 @@ def update_channel_enrichment(
         updates["language_confidence"] = language_confidence
     if emails is not None:
         updates["emails"] = emails
+    if telegram_account is not None:
+        updates["telegram_account"] = telegram_account
     if email_gate_present is not None:
         updates["email_gate_present"] = int(bool(email_gate_present))
     if last_updated is not None:
@@ -1028,6 +1036,11 @@ def _build_channel_filters(
 
     if filters.unique_emails and filters.emails_only:
         clauses.append(f"{prefix}channel_id NOT IN ({GLOBAL_DUPLICATE_CHANNELS_QUERY})")
+
+    if filters.telegram_only:
+        clauses.append(
+            f"({prefix}telegram_account IS NOT NULL AND TRIM({prefix}telegram_account) != '')"
+        )
 
     where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where_clause, params

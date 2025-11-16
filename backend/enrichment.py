@@ -26,6 +26,7 @@ class EnrichmentOptions:
     language_precise: bool = True
     update_metadata: bool = True
     update_activity: bool = True
+    telegram_enrichment: bool = True
 
     @classmethod
     def full(cls) -> "EnrichmentOptions":
@@ -40,6 +41,7 @@ class EnrichmentOptions:
             language_precise=False,
             update_metadata=False,
             update_activity=False,
+            telegram_enrichment=True,
         )
 
     @classmethod
@@ -53,6 +55,7 @@ class EnrichmentOptions:
             language_precise=bool(payload.get("language_precise", True)),
             update_metadata=bool(payload.get("update_metadata", True)),
             update_activity=bool(payload.get("update_activity", True)),
+            telegram_enrichment=bool(payload.get("telegram_enrichment", True)),
         )
 
     @classmethod
@@ -105,6 +108,7 @@ class EnrichmentOptions:
             "language_precise": self.language_precise,
             "update_metadata": self.update_metadata,
             "update_activity": self.update_activity,
+            "telegram_enrichment": self.telegram_enrichment,
         }
 
 
@@ -396,6 +400,7 @@ class EnrichmentManager:
             if job.options.emails_from_channel or job.options.emails_from_videos
             else None
         )
+        telegram_account = enriched.get("telegram_account")
         result_value = None
         if job.options.emails_from_channel or job.options.emails_from_videos:
             result_value = "emails_found" if enriched_emails else "no_emails"
@@ -418,6 +423,7 @@ class EnrichmentManager:
             language=language_value,
             language_confidence=language_confidence,
             emails=emails,
+            telegram_account=telegram_account,
             email_gate_present=email_gate_present,
             last_updated=enriched.get("last_updated") if job.options.update_activity else None,
             last_attempted=success_time,
@@ -442,6 +448,7 @@ class EnrichmentManager:
                 "language": language_value,
                 "languageConfidence": language_confidence,
                 "emails": enriched_emails,
+                "telegramAccount": telegram_account,
                 "lastUpdated": enriched.get("last_updated") if job.options.update_activity else None,
                 "emailGatePresent": email_gate_present,
                 "mode": job.mode,
@@ -476,6 +483,7 @@ class EnrichmentManager:
                     email_gate_present=False,
                     last_enriched_at=start_time if display_emails or stored_emails else None,
                     last_enriched_result="emails_found" if display_emails or stored_emails else None,
+                    telegram_account=None,
                 )
             job.update_counts(completed=True)
             job.push_update(
@@ -488,6 +496,7 @@ class EnrichmentManager:
                     "emails": display_emails,
                     "lastUpdated": channel.get("last_updated") or start_time,
                     "emailGatePresent": False,
+                    "telegramAccount": None,
                     "mode": job.mode,
                 }
             )
@@ -507,7 +516,9 @@ class EnrichmentManager:
         )
 
         try:
-            enriched = enrich_channel_email_only(channel)
+            enriched = enrich_channel_email_only(
+                channel, telegram_enabled=job.options.telegram_enrichment
+            )
         except EnrichmentError as exc:
             error_time = dt.datetime.utcnow().isoformat()
             reason = str(exc)
@@ -560,6 +571,7 @@ class EnrichmentManager:
         emails_value = ", ".join(emails) if emails else None
         last_updated = enriched.get("last_updated") or success_time
         email_gate_present = enriched.get("email_gate_present")
+        telegram_account = enriched.get("telegram_account")
         result_value = "emails_found" if emails else "no_emails"
         database.update_channel_enrichment(
             channel_id,
@@ -568,6 +580,7 @@ class EnrichmentManager:
             email_gate_present=email_gate_present,
             last_enriched_at=success_time,
             last_enriched_result=result_value,
+            telegram_account=telegram_account,
         )
 
         job.update_counts(completed=True)
@@ -581,6 +594,7 @@ class EnrichmentManager:
                 "emails": emails,
                 "lastUpdated": last_updated,
                 "emailGatePresent": email_gate_present,
+                "telegramAccount": telegram_account,
                 "mode": job.mode,
             }
         )
