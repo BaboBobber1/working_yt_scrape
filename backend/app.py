@@ -19,7 +19,9 @@ from .database import (
     ChannelFilters,
     channel_exists,
     ensure_channel_url,
+    get_enrichment_settings,
     get_discovery_keyword_state,
+    save_enrichment_settings,
     update_discovery_keyword_state,
 )
 from .enrichment import EnrichmentOptions, manager
@@ -134,6 +136,46 @@ def _coerce_non_negative_int(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
     return max(0, parsed)
+
+
+def _derive_email_mode(options: EnrichmentOptions) -> str:
+    if not options.emails_from_channel and not options.emails_from_videos:
+        return "off"
+    if options.emails_from_channel and options.emails_from_videos:
+        return "channel_and_videos"
+    if options.emails_from_channel:
+        return "channel_only"
+    return "videos_only"
+
+
+def _derive_language_mode(options: EnrichmentOptions) -> str:
+    if options.language_precise:
+        return "precise"
+    if options.language_basic:
+        return "fast"
+    return "off"
+
+
+def _serialize_enrichment_settings(options: EnrichmentOptions) -> Dict[str, Any]:
+    return {
+        "options": options.asdict(),
+        "emailMode": _derive_email_mode(options),
+        "languageMode": _derive_language_mode(options),
+    }
+
+
+def _build_enrichment_options(payload: Dict[str, Any]) -> EnrichmentOptions:
+    options_payload = payload.get("options") if isinstance(payload, dict) else None
+    emails_mode = payload.get("emails_mode") or payload.get("emailsMode") or payload.get("emailMode")
+    language_mode = payload.get("language_mode") or payload.get("languageMode")
+    base_options = (
+        EnrichmentOptions.from_payload(options_payload) if options_payload is not None else None
+    )
+    return EnrichmentOptions.with_modes(
+        base=base_options,
+        emails_mode=emails_mode,
+        language_mode=language_mode,
+    )
 
 
 def _collect_filters(
@@ -945,6 +987,22 @@ async def api_blacklist_import(file: UploadFile = File(...)) -> JSONResponse:
     return JSONResponse(result)
 
 
+@app.get("/api/enrichment/settings")
+def api_get_enrichment_settings() -> JSONResponse:
+    options = EnrichmentOptions.from_payload(get_enrichment_settings())
+    return JSONResponse(_serialize_enrichment_settings(options))
+
+
+@app.post("/api/enrichment/settings")
+def api_save_enrichment_settings(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
+    if not isinstance(payload, dict):
+        payload = {}
+    options = _build_enrichment_options(payload)
+    saved = save_enrichment_settings(options.asdict())
+    normalized = EnrichmentOptions.from_payload(saved)
+    return JSONResponse(_serialize_enrichment_settings(normalized))
+
+
 @app.post("/api/enrich")
 def api_enrich(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
     limit = payload.get("limit")
@@ -958,7 +1016,7 @@ def api_enrich(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
 
     mode = payload.get("mode", "full")
     if mode not in {"full", "email_only"}:
-        raise HTTPException(status_code=400, detail="mode must be 'full' or 'email_only'")
+        mode = "full"
 
     force_run = bool(payload.get("forceRun"))
     never_reenrich = bool(payload.get("neverReenrich"))
@@ -971,22 +1029,20 @@ def api_enrich(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
     filters = _collect_filters_from_payload(payload.get("filters")) if scope == "filtered" else None
 
     options_payload = payload.get("options")
-    emails_mode = payload.get("emails_mode") or payload.get("emailsMode")
+    emails_mode = payload.get("emails_mode") or payload.get("emailsMode") or payload.get("emailMode")
     language_mode = payload.get("language_mode") or payload.get("languageMode")
     options: Optional[EnrichmentOptions] = None
     if options_payload is not None or emails_mode or language_mode:
-        base_options = (
-            EnrichmentOptions.from_payload(options_payload) if options_payload is not None else None
-        )
-        options = EnrichmentOptions.with_modes(
-            base=base_options,
-            emails_mode=emails_mode,
-            language_mode=language_mode,
-        )
+        options = _build_enrichment_options(payload)
+    else:
+        stored = get_enrichment_settings()
+        options = EnrichmentOptions.from_payload(stored)
+        if mode == "email_only":
+            options = EnrichmentOptions.email_only()
 
     job = manager.start_job(
         limit,
-        mode=mode,
+        mode=options.mode_label(),
         options=options,
         scope=scope,
         category=category_value,

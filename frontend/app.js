@@ -16,6 +16,8 @@ import {
   restoreByFilter,
   restoreChannels,
   startEnrichment,
+  fetchEnrichmentSettings,
+  saveEnrichmentSettings,
 } from './api.js';
 
 const Category = {
@@ -150,7 +152,6 @@ function escapeHtml(value) {
 const DISCOVERY_SETTINGS_STORAGE_KEY = 'dashboard:discoverySettings';
 const DEFAULT_DISCOVERY_KEYWORDS =
   'crypto, bitcoin, ethereum, defi, altcoin, memecoin, onchain, crypto trading';
-const ENRICHMENT_SETTINGS_STORAGE_KEY = 'dashboard:enrichmentSettings';
 
 const DEFAULT_EMAIL_MODE = 'channel_and_videos';
 const DEFAULT_LANGUAGE_MODE = 'precise';
@@ -320,7 +321,6 @@ function describeEnrichmentOptions(options) {
       denyLanguagesText: '',
       denyLanguages: [],
       autoEnrichEnabled: false,
-      autoEnrichMode: 'email_only',
       enrichLimit: null,
       runUntilStopped: false,
     };
@@ -362,7 +362,7 @@ class Dashboard {
   init() {
     this.cacheElements();
     this.loadDiscoverySettings();
-    this.loadEnrichmentSettings();
+    this.refreshEnrichmentSettings();
     this.bindEvents();
     this.renderTabs();
     this.applyFiltersToUI(this.tables[this.activeTab].filters);
@@ -414,7 +414,7 @@ class Dashboard {
       discoverStopBtn: this.root.querySelector('#discoverStopBtn'),
       discoverRunCounter: this.root.querySelector('#discoverRunCounter'),
       discoverAutoEnrichToggle: document.getElementById('discoverAutoEnrichToggle'),
-      discoverAutoEnrichMode: document.getElementById('discoverAutoEnrichMode'),
+      discoverOpenEnrichmentSettings: document.getElementById('discoverOpenEnrichmentSettings'),
       discoverRunUntilStopped: document.getElementById('discoverRunUntilStopped'),
       discoverSettingsModal: document.getElementById('discoverSettingsModal'),
       discoverSettingsClose: document.getElementById('discoverSettingsCloseBtn'),
@@ -573,10 +573,9 @@ class Dashboard {
       this.updateEnrichmentModeControls(),
     );
 
-    this.el.discoverAutoEnrichToggle?.addEventListener('change', () => {
-      if (this.el.discoverAutoEnrichMode) {
-        this.el.discoverAutoEnrichMode.disabled = !this.el.discoverAutoEnrichToggle.checked;
-      }
+    this.el.discoverOpenEnrichmentSettings?.addEventListener('click', (event) => {
+      event.preventDefault();
+      this.openEnrichmentSettings();
     });
 
     this.el.discoverSettingsClose?.addEventListener('click', () => this.closeDiscoverSettings());
@@ -631,22 +630,17 @@ class Dashboard {
     this.discoverySettings = settings;
   }
 
-  loadEnrichmentSettings() {
+  async refreshEnrichmentSettings() {
     const defaults = defaultEnrichmentSettingsState();
-    let settings = defaults;
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        const stored = window.localStorage.getItem(ENRICHMENT_SETTINGS_STORAGE_KEY);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          settings = this.normalizeEnrichmentSettings({ ...defaults, ...parsed });
-        }
-      }
+      const response = await fetchEnrichmentSettings();
+      this.enrichmentSettings = this.normalizeEnrichmentSettings({ ...defaults, ...response });
     } catch (error) {
       console.warn('Failed to load enrichment settings', error);
-      settings = defaults;
+      this.enrichmentSettings = defaults;
     }
-    this.enrichmentSettings = settings;
+    this.updateEnrichmentLastUsed();
+    this.updateDiscoverySummary();
   }
 
   saveDiscoverySettings() {
@@ -712,9 +706,6 @@ class Dashboard {
       }
     }
 
-    const autoEnrichMode = ['full', 'email_only'].includes(raw.autoEnrichMode)
-      ? raw.autoEnrichMode
-      : 'email_only';
     const autoEnrichEnabled = Boolean(raw.autoEnrichEnabled);
     const runUntilStopped = Boolean(raw.runUntilStopped);
 
@@ -727,7 +718,6 @@ class Dashboard {
       denyLanguages,
       enrichLimit,
       autoEnrichEnabled,
-      autoEnrichMode,
       runUntilStopped,
     };
   }
@@ -761,20 +751,6 @@ class Dashboard {
       languageMode: languageMode || DEFAULT_LANGUAGE_MODE,
       options: mergedOptions,
     };
-  }
-
-  saveEnrichmentSettings() {
-    if (typeof window === 'undefined' || !window.localStorage) {
-      return;
-    }
-    try {
-      window.localStorage.setItem(
-        ENRICHMENT_SETTINGS_STORAGE_KEY,
-        JSON.stringify(this.enrichmentSettings),
-      );
-    } catch (error) {
-      console.warn('Failed to save enrichment settings', error);
-    }
   }
 
   setDiscoverySettings(settings) {
@@ -882,11 +858,12 @@ class Dashboard {
     }
   }
 
-  openEnrichmentSettings() {
+  async openEnrichmentSettings() {
     if (!this.el.enrichSettingsModal) {
       return;
     }
     this.closeAllDropdowns();
+    await this.refreshEnrichmentSettings();
     this.populateEnrichmentSettingsForm();
     this.el.enrichSettingsModal.hidden = false;
     this.el.enrichSettingsModal.setAttribute('aria-hidden', 'false');
@@ -941,11 +918,6 @@ class Dashboard {
     if (this.el.discoverAutoEnrichToggle) {
       this.el.discoverAutoEnrichToggle.checked = Boolean(settings.autoEnrichEnabled);
     }
-    if (this.el.discoverAutoEnrichMode) {
-      this.el.discoverAutoEnrichMode.value =
-        settings.autoEnrichMode === 'full' ? 'full' : 'email_only';
-      this.el.discoverAutoEnrichMode.disabled = !settings.autoEnrichEnabled;
-    }
     if (this.el.enrichLimit) {
       this.el.enrichLimit.value =
         settings.enrichLimit != null ? String(settings.enrichLimit) : '';
@@ -995,8 +967,6 @@ class Dashboard {
     }
 
     const autoEnrichEnabled = Boolean(this.el.discoverAutoEnrichToggle?.checked);
-    const autoEnrichMode =
-      this.el.discoverAutoEnrichMode?.value === 'full' ? 'full' : 'email_only';
     const runUntilStopped = Boolean(this.el.discoverRunUntilStopped?.checked);
 
     return {
@@ -1008,7 +978,6 @@ class Dashboard {
       lastUploadMaxAgeDays,
       enrichLimit,
       autoEnrichEnabled,
-      autoEnrichMode,
       runUntilStopped,
     };
   }
@@ -1863,10 +1832,24 @@ class Dashboard {
       emailMode,
       languageMode,
     });
-    this.saveEnrichmentSettings();
+    try {
+      const saved = await saveEnrichmentSettings({ options, emailMode, languageMode });
+      this.enrichmentSettings = this.normalizeEnrichmentSettings({
+        ...this.enrichmentSettings,
+        ...saved,
+      });
+    } catch (error) {
+      console.warn('Failed to save enrichment settings', error);
+      this.updateStatusBar('Failed to save enrichment settings.', 'error');
+      return;
+    }
     this.updateEnrichmentLastUsed();
     this.closeEnrichmentSettings();
-    await this.handleEnrich(options, { scope, emailMode, languageMode });
+    await this.handleEnrich(this.enrichmentSettings.options, {
+      scope,
+      emailMode: this.enrichmentSettings.emailMode,
+      languageMode: this.enrichmentSettings.languageMode,
+    });
   }
 
   async handleEnrich(options, overrides = {}) {
@@ -1960,30 +1943,17 @@ class Dashboard {
   }
 
   getAutoEnrichConfig() {
-    const discoverySettings = this.discoverySettings || defaultDiscoverySettingsState();
     const enrichmentSettings = this.enrichmentSettings || defaultEnrichmentSettingsState();
     const baseOptions = normalizeEnrichmentOptions(enrichmentSettings.options);
-    let emailMode = enrichmentSettings.emailMode || deriveEmailModeFromOptions(baseOptions);
-    let languageMode =
+    const emailMode = enrichmentSettings.emailMode || deriveEmailModeFromOptions(baseOptions);
+    const languageMode =
       enrichmentSettings.languageMode || deriveLanguageModeFromOptions(baseOptions);
 
-    let options = normalizeEnrichmentOptions({
+    const options = normalizeEnrichmentOptions({
       ...baseOptions,
       ...emailOptionsFromMode(emailMode),
       ...languageOptionsFromMode(languageMode),
     });
-
-    if (discoverySettings.autoEnrichMode !== 'full') {
-      emailMode = 'channel_only';
-      languageMode = 'off';
-      options = normalizeEnrichmentOptions({
-        ...options,
-        ...emailOptionsFromMode(emailMode),
-        ...languageOptionsFromMode(languageMode),
-        update_metadata: false,
-        update_activity: false,
-      });
-    }
 
     return { options, emailMode, languageMode };
   }
