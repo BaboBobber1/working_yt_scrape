@@ -825,6 +825,106 @@ def enrich_channel(channel: Dict[str, Optional[str]]) -> Dict[str, Optional[str]
     }
 
 
+def _option_enabled(options: object, key: str, default: bool) -> bool:
+    if hasattr(options, key):
+        try:
+            return bool(getattr(options, key))
+        except Exception:
+            return default
+    if isinstance(options, dict):
+        return bool(options.get(key, default))
+    return default
+
+
+def enrich_channel_with_options(
+    channel: Dict[str, Optional[str]], options: object
+) -> Dict[str, Optional[str]]:
+    channel_id = channel.get("channel_id")
+    if not channel_id:
+        raise EnrichmentError("Missing channel id")
+
+    emails_from_channel = _option_enabled(options, "emails_from_channel", True)
+    emails_from_videos = _option_enabled(options, "emails_from_videos", True)
+    language_basic = _option_enabled(options, "language_basic", True)
+    language_precise = _option_enabled(options, "language_precise", True)
+    update_metadata = _option_enabled(options, "update_metadata", True)
+    update_activity = _option_enabled(options, "update_activity", True)
+
+    needs_feed = any(
+        [emails_from_videos, language_basic, language_precise, update_metadata, update_activity]
+    )
+
+    feed_title: Optional[str] = None
+    feed_description: Optional[str] = None
+    video: Dict[str, Optional[str]] = {}
+    watch: Dict[str, Optional[str]] = {}
+    if needs_feed:
+        feed_title, feed_description, video = _fetch_rss(channel_id)
+        watch = _fetch_watch_details(video["video_id"])
+
+    combined_description = ""
+    combined_texts: List[str] = []
+    if video:
+        combined_description = watch.get("description") or video.get("description") or ""
+        combined_texts = [video.get("title", ""), combined_description, feed_description or ""]
+
+    emails: List[str] = []
+    email_gate_present: Optional[bool] = None
+
+    if emails_from_videos and combined_description:
+        emails.extend(extract_emails([combined_description]))
+        if feed_description:
+            emails.extend(extract_emails([feed_description]))
+    elif emails_from_channel and feed_description:
+        emails.extend(extract_emails([feed_description]))
+
+    if emails_from_channel:
+        about_emails, gate_present = _fetch_about_emails(channel)
+        if gate_present and email_gate_present is None:
+            email_gate_present = gate_present
+        emails.extend(about_emails)
+
+    unique_emails: List[str] = []
+    seen: Set[str] = set()
+    for email in emails:
+        lower = email.lower()
+        if lower in seen:
+            continue
+        unique_emails.append(email)
+        seen.add(lower)
+        if len(unique_emails) >= 5:
+            break
+
+    if unique_emails:
+        email_gate_present = False
+
+    language: Optional[str] = None
+    language_confidence: Optional[float] = None
+    if language_precise and combined_texts:
+        lang_result = detect_language("\n".join(filter(None, combined_texts)))
+        if lang_result:
+            language = lang_result.get("language")
+            language_confidence = lang_result.get("confidence")
+    if language is None and language_basic and watch:
+        language = watch.get("language") or None
+
+    last_updated = None
+    if update_activity:
+        last_updated = watch.get("upload_date") if watch else None
+        if not last_updated and video:
+            last_updated = video.get("timestamp")
+
+    return {
+        "name": feed_title or channel.get("name") or channel.get("title"),
+        "subscribers": watch.get("subscribers") if update_metadata and watch else None,
+        "language": language,
+        "language_confidence": language_confidence,
+        "emails": unique_emails if (emails_from_channel or emails_from_videos) else [],
+        "last_updated": last_updated,
+        "email_gate_present": email_gate_present,
+    }
+
+
 def _resolve_about_url(channel: Dict[str, Optional[str]]) -> str:
     url = channel.get("url") or ""
     if url:

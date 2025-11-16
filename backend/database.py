@@ -1726,6 +1726,51 @@ def get_channels_for_email_enrichment(limit: Optional[int]) -> List[Dict[str, An
         return [dict(row) for row in cursor.fetchall()]
 
 
+def get_enrichment_candidates(
+    email_only_mode: bool,
+    *,
+    scope: str,
+    category: ChannelCategory,
+    filters: Optional[ChannelFilters],
+    limit: Optional[int],
+) -> List[Dict[str, Any]]:
+    if scope != "filtered" or filters is None:
+        if email_only_mode:
+            return get_channels_for_email_enrichment(limit)
+        return get_pending_channels(limit)
+
+    limit_clause = "LIMIT ?" if limit is not None else ""
+    params: List[Any] = []
+    table = CHANNEL_TABLES[category]
+
+    statuses = filters.statuses
+    if statuses is None and not email_only_mode:
+        statuses = ("new", "error")
+
+    filtered = ChannelFilters(
+        query_text=filters.query_text,
+        languages=filters.languages,
+        statuses=statuses,
+        min_subscribers=filters.min_subscribers,
+        max_subscribers=filters.max_subscribers,
+        emails_only=filters.emails_only,
+        include_archived=False,
+        email_gate_only=filters.email_gate_only,
+        unique_emails=filters.unique_emails,
+    )
+
+    where_clause, filter_params = _build_channel_filters(filtered)
+    params.extend(filter_params)
+    order_by = "last_updated IS NULL DESC, last_updated ASC" if email_only_mode else "last_attempted IS NULL DESC, last_attempted ASC"
+    query = f"SELECT * FROM {table} {where_clause} ORDER BY {order_by} {limit_clause}"
+    if limit is not None:
+        params.append(limit)
+
+    with get_cursor() as cursor:
+        cursor.execute(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_channel_status_totals() -> Dict[str, int]:
     table = CHANNEL_TABLES[ChannelCategory.ACTIVE]
     totals: Dict[str, int] = {status: 0 for status in ("new", "processing", "completed", "error")}

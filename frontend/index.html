@@ -59,27 +59,11 @@
             </div>
           </div>
           <div class="action-group">
-            <button
-              class="btn btn--green btn--menu"
-              id="enrichBtn"
-              type="button"
-              aria-haspopup="true"
-              aria-expanded="false"
-            >
+            <button class="btn btn--green btn--xl" id="enrichBtn" type="button">
               <span class="btn-icon">⚙️</span>
               Enrich
-              <span class="btn-caret">▾</span>
             </button>
-            <div class="dropdown-menu" id="enrichMenu" role="menu" hidden>
-              <button class="dropdown-menu__item" id="enrichMenuFullBtn" type="button">
-                <span class="btn-icon">⚙️</span>
-                Enrich (full)
-              </button>
-              <button class="dropdown-menu__item" id="enrichEmailBtn" type="button">
-                <span class="btn-icon">✉️</span>
-                Enrich (Email-only)
-              </button>
-            </div>
+            <p class="action-subtext" id="enrichLastUsed">Last used: Full enrichment</p>
           </div>
         </div>
         <div class="discover-runner">
@@ -281,6 +265,80 @@
           <button type="button" class="btn btn--outline" id="discoverSettingsCancelBtn">Cancel</button>
           <button type="submit" form="discoverSettingsForm" class="btn btn--green" id="discoverSettingsStartBtn">
             <span class="btn-icon">🔍</span>Start discovery
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="enrichSettingsModal" hidden aria-hidden="true">
+      <div
+        class="modal-content modal-content--wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="enrichSettingsTitle"
+      >
+        <div class="modal-header">
+          <h2 id="enrichSettingsTitle">Enrichment settings</h2>
+          <button type="button" class="modal-close" id="enrichSettingsCloseBtn" aria-label="Close">×</button>
+        </div>
+        <form class="modal-body discover-modal-body" id="enrichSettingsForm">
+          <section class="modal-section">
+            <h3 class="modal-section__title">Scope</h3>
+            <div class="modal-switches">
+              <label class="modal-toggle">
+                <input type="radio" name="enrichScope" id="enrichScopeFiltered" value="filtered" checked />
+                Current filter only
+              </label>
+              <label class="modal-toggle">
+                <input type="radio" name="enrichScope" id="enrichScopeAllActive" value="all_active" />
+                All active channels
+              </label>
+            </div>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Email enrichment</h3>
+            <div class="modal-switches">
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichEmailsChannel" />
+                Scan channel description for emails (fast)
+              </label>
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichEmailsVideos" />
+                Scan recent video descriptions for emails (slow / full)
+              </label>
+            </div>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Language detection</h3>
+            <div class="modal-switches">
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichLanguageBasic" />
+                Basic language detection
+              </label>
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichLanguagePrecise" />
+                Precise language detection
+              </label>
+            </div>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section__title">Other steps</h3>
+            <div class="modal-switches">
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichUpdateMetadata" />
+                Refresh channel metadata
+              </label>
+              <label class="modal-toggle">
+                <input type="checkbox" id="enrichUpdateActivity" />
+                Update last upload/activity
+              </label>
+            </div>
+          </section>
+        </form>
+        <div class="modal-footer">
+          <button type="button" class="btn btn--outline" id="enrichSettingsCancelBtn">Cancel</button>
+          <button type="submit" form="enrichSettingsForm" class="btn btn--green" id="enrichSettingsStartBtn">
+            <span class="btn-icon">⚙️</span>Start enrichment
           </button>
         </div>
       </div>
