@@ -22,7 +22,7 @@ from .database import (
     get_discovery_keyword_state,
     update_discovery_keyword_state,
 )
-from .enrichment import manager
+from .enrichment import EnrichmentOptions, manager
 from .state import discovery_state
 from .youtube import (
     ChannelResolution,
@@ -204,6 +204,22 @@ def _parse_category(value: Optional[str]) -> ChannelCategory:
     except ValueError as exc:
         allowed = ", ".join(category.value for category in ChannelCategory)
         raise HTTPException(status_code=400, detail=f"category must be one of: {allowed}") from exc
+
+
+def _collect_filters_from_payload(payload: Optional[Dict[str, Any]]) -> Optional[ChannelFilters]:
+    if not isinstance(payload, dict):
+        return None
+    return _collect_filters(
+        q=payload.get("query") or payload.get("q"),
+        languages=payload.get("languages"),
+        statuses=payload.get("statuses"),
+        min_subscribers=payload.get("minSubscribers") or payload.get("min_subscribers"),
+        max_subscribers=payload.get("maxSubscribers") or payload.get("max_subscribers"),
+        emails_only=bool(payload.get("emailsOnly") or payload.get("emails_only")),
+        include_archived=False,
+        email_gate_only=bool(payload.get("emailGateOnly") or payload.get("email_gate_only")),
+        unique_emails=bool(payload.get("uniqueEmails") or payload.get("unique_emails")),
+    )
 
 
 @dataclass
@@ -947,9 +963,23 @@ def api_enrich(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
     force_run = bool(payload.get("forceRun"))
     never_reenrich = bool(payload.get("neverReenrich"))
 
+    scope = str(payload.get("scope") or "all_active")
+    if scope not in {"filtered", "all_active"}:
+        scope = "all_active"
+
+    category_value = _parse_category(payload.get("category"))
+    filters = _collect_filters_from_payload(payload.get("filters")) if scope == "filtered" else None
+
+    options_payload = payload.get("options")
+    options = EnrichmentOptions.from_payload(options_payload) if options_payload is not None else None
+
     job = manager.start_job(
         limit,
         mode=mode,
+        options=options,
+        scope=scope,
+        category=category_value,
+        filters=filters,
         force_run=force_run,
         never_reenrich=never_reenrich,
     )
@@ -960,6 +990,7 @@ def api_enrich(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
             "mode": job.mode,
             "requested": job.requested,
             "skipped": job.skipped,
+            "options": job.options.asdict(),
         }
     )
 

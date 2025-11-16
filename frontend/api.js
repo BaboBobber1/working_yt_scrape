@@ -121,15 +121,42 @@ export async function discoverChannels(keywords, perKeyword, options = {}) {
   });
 }
 
-export async function startEnrichment(mode, limit, options = {}) {
+export async function startEnrichment(config = {}) {
+  const {
+    mode,
+    limit,
+    options,
+    scope,
+    category,
+    filters,
+    forceRun = false,
+    neverReenrich = false,
+  } = config;
+
+  const payload = {
+    limit: limit ?? null,
+    forceRun: Boolean(forceRun),
+    neverReenrich: Boolean(neverReenrich),
+  };
+  if (mode) {
+    payload.mode = mode;
+  }
+  if (options) {
+    payload.options = options;
+  }
+  if (scope) {
+    payload.scope = scope;
+  }
+  if (category) {
+    payload.category = category;
+  }
+  if (filters) {
+    payload.filters = filters;
+  }
+
   return request('/api/enrich', {
     method: 'POST',
-    body: JSON.stringify({
-      mode,
-      limit: limit ?? null,
-      forceRun: Boolean(options.forceRun),
-      neverReenrich: Boolean(options.neverReenrich),
-    }),
+    body: JSON.stringify(payload),
   });
 }
 

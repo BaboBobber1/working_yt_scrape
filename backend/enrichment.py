@@ -12,10 +12,68 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import database
-from .youtube import EnrichmentError, enrich_channel, enrich_channel_email_only
+from .youtube import EnrichmentError, enrich_channel_email_only, enrich_channel_with_options
 
 
 NO_EMAIL_RETRY_WINDOW = dt.timedelta(days=30)
+
+
+@dataclass(frozen=True)
+class EnrichmentOptions:
+    emails_from_channel: bool = True
+    emails_from_videos: bool = True
+    language_basic: bool = True
+    language_precise: bool = True
+    update_metadata: bool = True
+    update_activity: bool = True
+
+    @classmethod
+    def full(cls) -> "EnrichmentOptions":
+        return cls()
+
+    @classmethod
+    def email_only(cls) -> "EnrichmentOptions":
+        return cls(
+            emails_from_channel=True,
+            emails_from_videos=False,
+            language_basic=False,
+            language_precise=False,
+            update_metadata=False,
+            update_activity=False,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: Optional[Dict[str, Any]]) -> "EnrichmentOptions":
+        if not isinstance(payload, dict):
+            return cls.full()
+        return cls(
+            emails_from_channel=bool(payload.get("emails_from_channel", True)),
+            emails_from_videos=bool(payload.get("emails_from_videos", True)),
+            language_basic=bool(payload.get("language_basic", True)),
+            language_precise=bool(payload.get("language_precise", True)),
+            update_metadata=bool(payload.get("update_metadata", True)),
+            update_activity=bool(payload.get("update_activity", True)),
+        )
+
+    def mode_label(self) -> str:
+        if self == self.full():
+            return "full"
+        if self == self.email_only():
+            return "email_only"
+        return "custom"
+
+    def is_email_only(self) -> bool:
+        return self == self.email_only()
+
+    def asdict(self) -> Dict[str, Any]:
+        return {
+            "emails_from_channel": self.emails_from_channel,
+            "emails_from_videos": self.emails_from_videos,
+            "language_basic": self.language_basic,
+            "language_precise": self.language_precise,
+            "update_metadata": self.update_metadata,
+            "update_activity": self.update_activity,
+        }
 
 
 def _parse_iso_datetime(value: Optional[str]) -> Optional[dt.datetime]:
@@ -34,6 +92,7 @@ class EnrichmentJob:
     job_id: str
     channels: List[Dict]
     mode: str = "full"
+    options: EnrichmentOptions = field(default_factory=EnrichmentOptions.full)
     started_at: float = field(default_factory=time.monotonic)
     completed: int = 0
     errors: int = 0
@@ -78,6 +137,7 @@ class EnrichmentJob:
             "mode": self.mode,
             "requested": self.requested,
             "skipped": self.skipped,
+            "options": self.options.asdict(),
         }
 
 
@@ -94,21 +154,35 @@ class EnrichmentManager:
         limit: Optional[int],
         mode: str = "full",
         *,
+        options: Optional[EnrichmentOptions] = None,
+        scope: str = "all_active",
+        category: database.ChannelCategory = database.ChannelCategory.ACTIVE,
+        filters: Optional[database.ChannelFilters] = None,
         force_run: bool = False,
         never_reenrich: bool = False,
     ) -> EnrichmentJob:
         if mode not in {"full", "email_only"}:
             raise ValueError(f"Unsupported enrichment mode: {mode}")
-        if mode == "email_only":
-            channels = database.get_channels_for_email_enrichment(limit)
-        else:
-            channels = database.get_pending_channels(limit)
+
+        effective_options = options or (
+            EnrichmentOptions.email_only() if mode == "email_only" else EnrichmentOptions.full()
+        )
+        email_only_mode = effective_options.is_email_only()
+
+        channels = database.get_enrichment_candidates(
+            email_only_mode,
+            scope=scope,
+            category=category,
+            filters=filters,
+            limit=limit,
+        )
         filtered, skipped = self._filter_channels(channels, force_run=force_run, never_reenrich=never_reenrich)
         job_id = str(uuid.uuid4())
         job = EnrichmentJob(
             job_id=job_id,
             channels=filtered,
-            mode=mode,
+            mode=effective_options.mode_label(),
+            options=effective_options,
             requested=len(channels),
             skipped=len(skipped),
         )
@@ -198,7 +272,7 @@ class EnrichmentManager:
         }
 
     def _process_channel(self, job: EnrichmentJob, channel: Dict) -> None:
-        if job.mode == "email_only":
+        if job.options.is_email_only():
             self._process_channel_email_only(job, channel)
         else:
             self._process_channel_full(job, channel)
@@ -223,7 +297,7 @@ class EnrichmentManager:
         )
 
         try:
-            enriched = enrich_channel(channel)
+            enriched = enrich_channel_with_options(channel, job.options)
         except EnrichmentError as exc:
             error_time = dt.datetime.utcnow().isoformat()
             reason = str(exc)
@@ -284,17 +358,35 @@ class EnrichmentManager:
         if enriched_emails:
             database.record_channel_emails(channel_id, enriched_emails, success_time)
         emails = ", ".join(enriched_emails) if enriched_emails else None
-        email_gate_present = enriched.get("email_gate_present")
-        result_value = "emails_found" if enriched_emails else "no_emails"
+        email_gate_present = (
+            enriched.get("email_gate_present")
+            if job.options.emails_from_channel or job.options.emails_from_videos
+            else None
+        )
+        result_value = None
+        if job.options.emails_from_channel or job.options.emails_from_videos:
+            result_value = "emails_found" if enriched_emails else "no_emails"
+        if result_value is None:
+            result_value = "completed"
+
+        language_value = None
+        language_confidence = None
+        if job.options.language_basic or job.options.language_precise:
+            language_value = enriched.get("language")
+            language_confidence = enriched.get("language_confidence")
         database.update_channel_enrichment(
             channel_id,
-            name=enriched.get("name") or enriched.get("title") or channel.get("name") or channel.get("title"),
-            subscribers=enriched.get("subscribers"),
-            language=enriched.get("language"),
-            language_confidence=enriched.get("language_confidence"),
+            name=(
+                enriched.get("name")
+                if job.options.update_metadata
+                else None
+            ),
+            subscribers=enriched.get("subscribers") if job.options.update_metadata else None,
+            language=language_value,
+            language_confidence=language_confidence,
             emails=emails,
             email_gate_present=email_gate_present,
-            last_updated=enriched.get("last_updated") or success_time,
+            last_updated=enriched.get("last_updated") if job.options.update_activity else None,
             last_attempted=success_time,
             last_enriched_at=success_time,
             last_enriched_result=result_value,
@@ -313,11 +405,11 @@ class EnrichmentManager:
                 "status": "completed",
                 "statusReason": None,
                 "lastStatusChange": success_time,
-                "subscribers": enriched.get("subscribers"),
-                "language": enriched.get("language"),
-                "languageConfidence": enriched.get("language_confidence"),
+                "subscribers": enriched.get("subscribers") if job.options.update_metadata else None,
+                "language": language_value,
+                "languageConfidence": language_confidence,
                 "emails": enriched_emails,
-                "lastUpdated": enriched.get("last_updated") or success_time,
+                "lastUpdated": enriched.get("last_updated") if job.options.update_activity else None,
                 "emailGatePresent": email_gate_present,
                 "mode": job.mode,
             }

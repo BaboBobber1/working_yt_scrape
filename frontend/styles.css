@@ -203,6 +203,12 @@ a:hover {
   position: relative;
 }
 
+.action-subtext {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 8px);

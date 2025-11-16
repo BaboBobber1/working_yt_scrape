@@ -150,6 +150,7 @@ function escapeHtml(value) {
 const DISCOVERY_SETTINGS_STORAGE_KEY = 'dashboard:discoverySettings';
 const DEFAULT_DISCOVERY_KEYWORDS =
   'crypto, bitcoin, ethereum, defi, altcoin, memecoin, onchain, crypto trading';
+const ENRICHMENT_SETTINGS_STORAGE_KEY = 'dashboard:enrichmentSettings';
 
 function parseDiscoveryKeywords(text) {
   if (!text) {
@@ -171,6 +172,83 @@ function parseDiscoveryDenyLanguages(text) {
     .filter(Boolean);
 }
 
+function defaultEnrichmentOptions() {
+  return {
+    emails_from_channel: true,
+    emails_from_videos: true,
+    language_basic: true,
+    language_precise: true,
+    update_metadata: true,
+    update_activity: true,
+  };
+}
+
+function emailOnlyEnrichmentOptions() {
+  return {
+    emails_from_channel: true,
+    emails_from_videos: false,
+    language_basic: false,
+    language_precise: false,
+    update_metadata: false,
+    update_activity: false,
+  };
+}
+
+function defaultEnrichmentSettingsState() {
+  return {
+    scope: 'filtered',
+    options: defaultEnrichmentOptions(),
+  };
+}
+
+function normalizeEnrichmentOptions(raw, fallback = defaultEnrichmentOptions()) {
+  if (!raw || typeof raw !== 'object') {
+    return { ...fallback };
+  }
+  return {
+    emails_from_channel: Boolean(raw.emails_from_channel ?? fallback.emails_from_channel),
+    emails_from_videos: Boolean(raw.emails_from_videos ?? fallback.emails_from_videos),
+    language_basic: Boolean(raw.language_basic ?? fallback.language_basic),
+    language_precise: Boolean(raw.language_precise ?? fallback.language_precise),
+    update_metadata: Boolean(raw.update_metadata ?? fallback.update_metadata),
+    update_activity: Boolean(raw.update_activity ?? fallback.update_activity),
+  };
+}
+
+function describeEnrichmentOptions(options) {
+  const parts = [];
+  if (options.emails_from_channel && options.emails_from_videos) {
+    parts.push('emails (channel + videos)');
+  } else if (options.emails_from_videos) {
+    parts.push('emails from videos');
+  } else if (options.emails_from_channel) {
+    parts.push('emails from channel');
+  }
+  if (options.language_precise && options.language_basic) {
+    parts.push('precise language');
+  } else if (options.language_precise) {
+    parts.push('precise language');
+  } else if (options.language_basic) {
+    parts.push('basic language');
+  }
+  if (options.update_metadata || options.update_activity) {
+    const misc = [];
+    if (options.update_metadata) {
+      misc.push('metadata');
+    }
+    if (options.update_activity) {
+      misc.push('activity');
+    }
+    if (misc.length) {
+      parts.push(misc.join(' + '));
+    }
+  }
+  if (!parts.length) {
+    return 'Custom (no steps enabled)';
+  }
+  return parts.join(', ');
+}
+
 function defaultDiscoverySettingsState() {
   return {
     keywordsText: DEFAULT_DISCOVERY_KEYWORDS,
@@ -181,6 +259,7 @@ function defaultDiscoverySettingsState() {
     denyLanguages: [],
     autoEnrichEnabled: false,
     autoEnrichMode: 'email_only',
+    autoEnrichOptions: emailOnlyEnrichmentOptions(),
     enrichLimit: null,
     runUntilStopped: false,
   };
@@ -206,6 +285,7 @@ class Dashboard {
     this.pendingAutoEnrich = 0;
     this.autoEnrichQueuedNotified = false;
     this.discoverySettings = defaultDiscoverySettingsState();
+    this.enrichmentSettings = defaultEnrichmentSettingsState();
     this.activeDropdown = null;
     this.activeDropdownToggle = null;
     this.handleDocumentClick = this.handleDocumentClick.bind(this);
@@ -221,6 +301,7 @@ class Dashboard {
   init() {
     this.cacheElements();
     this.loadDiscoverySettings();
+    this.loadEnrichmentSettings();
     this.bindEvents();
     this.renderTabs();
     this.applyFiltersToUI(this.tables[this.activeTab].filters);
@@ -234,6 +315,7 @@ class Dashboard {
     this.loadStats();
     this.loadTable(this.activeTab);
     this.startStatsPolling();
+    this.updateEnrichmentLastUsed();
   }
 
   cacheElements() {
@@ -276,9 +358,19 @@ class Dashboard {
       discoverSettingsForm: document.getElementById('discoverSettingsForm'),
       discoverSettingsStart: document.getElementById('discoverSettingsStartBtn'),
       enrichBtn: this.root.querySelector('#enrichBtn'),
-      enrichMenu: this.root.querySelector('#enrichMenu'),
-      enrichMenuFullBtn: this.root.querySelector('#enrichMenuFullBtn'),
-      enrichEmailBtn: this.root.querySelector('#enrichEmailBtn'),
+      enrichLastUsed: this.root.querySelector('#enrichLastUsed'),
+      enrichSettingsModal: document.getElementById('enrichSettingsModal'),
+      enrichSettingsClose: document.getElementById('enrichSettingsCloseBtn'),
+      enrichSettingsCancel: document.getElementById('enrichSettingsCancelBtn'),
+      enrichSettingsForm: document.getElementById('enrichSettingsForm'),
+      enrichScopeFiltered: document.getElementById('enrichScopeFiltered'),
+      enrichScopeAll: document.getElementById('enrichScopeAllActive'),
+      enrichEmailsChannel: document.getElementById('enrichEmailsChannel'),
+      enrichEmailsVideos: document.getElementById('enrichEmailsVideos'),
+      enrichLanguageBasic: document.getElementById('enrichLanguageBasic'),
+      enrichLanguagePrecise: document.getElementById('enrichLanguagePrecise'),
+      enrichUpdateMetadata: document.getElementById('enrichUpdateMetadata'),
+      enrichUpdateActivity: document.getElementById('enrichUpdateActivity'),
       enrichLimit: document.getElementById('enrichLimit'),
       enrichForceToggle: this.root.querySelector('#enrichForceToggle'),
       enrichNeverToggle: this.root.querySelector('#enrichNeverToggle'),
@@ -388,21 +480,18 @@ class Dashboard {
 
     this.el.enrichBtn.addEventListener('click', (event) => {
       event.preventDefault();
-      event.stopPropagation();
-      this.toggleDropdown(this.el.enrichBtn, this.el.enrichMenu);
+      this.openEnrichmentSettings();
     });
-    this.el.enrichMenu?.addEventListener('click', (event) => {
-      event.stopPropagation();
+    this.el.enrichSettingsClose?.addEventListener('click', () => this.closeEnrichmentSettings());
+    this.el.enrichSettingsCancel?.addEventListener('click', () => this.closeEnrichmentSettings());
+    this.el.enrichSettingsModal?.addEventListener('click', (event) => {
+      if (event.target === this.el.enrichSettingsModal) {
+        this.closeEnrichmentSettings();
+      }
     });
-    this.el.enrichMenuFullBtn?.addEventListener('click', (event) => {
-      event.stopPropagation();
-      this.closeDropdown(this.el.enrichMenu, this.el.enrichBtn);
-      this.handleEnrich('full');
-    });
-    this.el.enrichEmailBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      this.closeDropdown(this.el.enrichMenu, this.el.enrichBtn);
-      this.handleEnrich('email_only');
+    this.el.enrichSettingsForm?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      await this.handleEnrichmentSettingsSubmit();
     });
 
     this.el.discoverAutoEnrichToggle?.addEventListener('change', () => {
@@ -461,6 +550,24 @@ class Dashboard {
       settings = defaults;
     }
     this.discoverySettings = settings;
+  }
+
+  loadEnrichmentSettings() {
+    const defaults = defaultEnrichmentSettingsState();
+    let settings = defaults;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const stored = window.localStorage.getItem(ENRICHMENT_SETTINGS_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          settings = this.normalizeEnrichmentSettings({ ...defaults, ...parsed });
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load enrichment settings', error);
+      settings = defaults;
+    }
+    this.enrichmentSettings = settings;
   }
 
   saveDiscoverySettings() {
@@ -528,6 +635,9 @@ class Dashboard {
 
     const autoEnrichMode = raw.autoEnrichMode === 'full' ? 'full' : 'email_only';
     const autoEnrichEnabled = Boolean(raw.autoEnrichEnabled);
+    const autoEnrichFallback =
+      autoEnrichMode === 'full' ? defaultEnrichmentOptions() : emailOnlyEnrichmentOptions();
+    const autoEnrichOptions = normalizeEnrichmentOptions(raw.autoEnrichOptions, autoEnrichFallback);
     const runUntilStopped = Boolean(raw.runUntilStopped);
 
     return {
@@ -540,8 +650,30 @@ class Dashboard {
       enrichLimit,
       autoEnrichEnabled,
       autoEnrichMode,
+      autoEnrichOptions,
       runUntilStopped,
     };
+  }
+
+  normalizeEnrichmentSettings(raw) {
+    const defaults = defaultEnrichmentSettingsState();
+    const scope = raw.scope === 'all_active' ? 'all_active' : 'filtered';
+    const options = normalizeEnrichmentOptions(raw.options, defaults.options);
+    return { scope, options };
+  }
+
+  saveEnrichmentSettings() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        ENRICHMENT_SETTINGS_STORAGE_KEY,
+        JSON.stringify(this.enrichmentSettings),
+      );
+    } catch (error) {
+      console.warn('Failed to save enrichment settings', error);
+    }
   }
 
   setDiscoverySettings(settings) {
@@ -582,8 +714,13 @@ class Dashboard {
       parts.push(`Enrich limit: ${formatNumber(settings.enrichLimit)}`);
     }
     if (settings.autoEnrichEnabled) {
-      const modeLabel = settings.autoEnrichMode === 'full' ? 'normal' : 'email only';
-      parts.push(`Auto enrich: ${modeLabel}`);
+      const description = describeEnrichmentOptions(
+        settings.autoEnrichOptions ||
+          (settings.autoEnrichMode === 'full'
+            ? defaultEnrichmentOptions()
+            : emailOnlyEnrichmentOptions()),
+      );
+      parts.push(`Auto enrich: ${description}`);
     } else {
       parts.push('Auto enrich: off');
     }
@@ -591,6 +728,61 @@ class Dashboard {
       parts.push('Loop: on');
     }
     this.el.discoverSummary.textContent = parts.join(' · ');
+  }
+
+  updateEnrichmentLastUsed() {
+    if (!this.el.enrichLastUsed) {
+      return;
+    }
+    const settings = this.enrichmentSettings || defaultEnrichmentSettingsState();
+    const description = describeEnrichmentOptions(settings.options);
+    this.el.enrichLastUsed.textContent = `Last used: ${description}`;
+  }
+
+  populateEnrichmentSettingsForm() {
+    const settings = this.enrichmentSettings || defaultEnrichmentSettingsState();
+    if (this.el.enrichScopeFiltered) {
+      this.el.enrichScopeFiltered.checked = settings.scope !== 'all_active';
+    }
+    if (this.el.enrichScopeAll) {
+      this.el.enrichScopeAll.checked = settings.scope === 'all_active';
+    }
+    if (this.el.enrichEmailsChannel) {
+      this.el.enrichEmailsChannel.checked = Boolean(settings.options.emails_from_channel);
+    }
+    if (this.el.enrichEmailsVideos) {
+      this.el.enrichEmailsVideos.checked = Boolean(settings.options.emails_from_videos);
+    }
+    if (this.el.enrichLanguageBasic) {
+      this.el.enrichLanguageBasic.checked = Boolean(settings.options.language_basic);
+    }
+    if (this.el.enrichLanguagePrecise) {
+      this.el.enrichLanguagePrecise.checked = Boolean(settings.options.language_precise);
+    }
+    if (this.el.enrichUpdateMetadata) {
+      this.el.enrichUpdateMetadata.checked = Boolean(settings.options.update_metadata);
+    }
+    if (this.el.enrichUpdateActivity) {
+      this.el.enrichUpdateActivity.checked = Boolean(settings.options.update_activity);
+    }
+  }
+
+  openEnrichmentSettings() {
+    if (!this.el.enrichSettingsModal) {
+      return;
+    }
+    this.closeAllDropdowns();
+    this.populateEnrichmentSettingsForm();
+    this.el.enrichSettingsModal.hidden = false;
+    this.el.enrichSettingsModal.setAttribute('aria-hidden', 'false');
+  }
+
+  closeEnrichmentSettings() {
+    if (!this.el.enrichSettingsModal) {
+      return;
+    }
+    this.el.enrichSettingsModal.hidden = true;
+    this.el.enrichSettingsModal.setAttribute('aria-hidden', 'true');
   }
 
   openDiscoverSettings() {
@@ -690,6 +882,8 @@ class Dashboard {
     const autoEnrichEnabled = Boolean(this.el.discoverAutoEnrichToggle?.checked);
     const autoEnrichMode =
       this.el.discoverAutoEnrichMode?.value === 'full' ? 'full' : 'email_only';
+    const autoEnrichOptions =
+      autoEnrichMode === 'full' ? defaultEnrichmentOptions() : emailOnlyEnrichmentOptions();
     const runUntilStopped = Boolean(this.el.discoverRunUntilStopped?.checked);
 
     return {
@@ -702,6 +896,7 @@ class Dashboard {
       enrichLimit,
       autoEnrichEnabled,
       autoEnrichMode,
+      autoEnrichOptions,
       runUntilStopped,
     };
   }
@@ -1536,12 +1731,28 @@ class Dashboard {
     }
   }
 
-  async handleEnrich(mode, overrides = {}) {
-    this.closeDropdown(this.el.enrichMenu, this.el.enrichBtn);
+  async handleEnrichmentSettingsSubmit() {
+    const scope = this.el.enrichScopeAll?.checked ? 'all_active' : 'filtered';
+    const options = {
+      emails_from_channel: Boolean(this.el.enrichEmailsChannel?.checked),
+      emails_from_videos: Boolean(this.el.enrichEmailsVideos?.checked),
+      language_basic: Boolean(this.el.enrichLanguageBasic?.checked),
+      language_precise: Boolean(this.el.enrichLanguagePrecise?.checked),
+      update_metadata: Boolean(this.el.enrichUpdateMetadata?.checked),
+      update_activity: Boolean(this.el.enrichUpdateActivity?.checked),
+    };
+    this.enrichmentSettings = this.normalizeEnrichmentSettings({ scope, options });
+    this.saveEnrichmentSettings();
+    this.updateEnrichmentLastUsed();
+    this.closeEnrichmentSettings();
+    await this.handleEnrich(options, { scope });
+  }
+
+  async handleEnrich(options, overrides = {}) {
     if (this.enrichmentBusy) {
       return;
     }
-    const { limitOverride = null, autoTriggered = false } = overrides;
+    const { limitOverride = null, autoTriggered = false, scope: scopeOverride = null } = overrides;
     let limitValue = null;
     if (limitOverride != null) {
       limitValue = Number(limitOverride);
@@ -1552,20 +1763,30 @@ class Dashboard {
       this.updateStatusBar('Enrichment limit must be a positive number.', 'error');
       return;
     }
+
+    const appliedOptions = normalizeEnrichmentOptions(
+      options || this.enrichmentSettings?.options || defaultEnrichmentOptions(),
+    );
+    const scope = scopeOverride || this.enrichmentSettings?.scope || 'filtered';
+
     try {
       this.enrichmentBusy = true;
       this.autoEnrichQueuedNotified = false;
       this.el.enrichBtn.disabled = true;
-      this.el.enrichEmailBtn.disabled = true;
-      if (this.el.enrichMenuFullBtn) {
-        this.el.enrichMenuFullBtn.disabled = true;
-      }
       this.renderTable();
-      const options = {
+      const request = {
+        limit: limitValue,
+        options: appliedOptions,
+        scope,
+        category: this.activeTab,
         forceRun: this.el.enrichForceToggle?.checked ?? false,
         neverReenrich: this.el.enrichNeverToggle?.checked ?? false,
       };
-      const { jobId, total, skipped = 0 } = await startEnrichment(mode, limitValue, options);
+      if (scope === 'filtered') {
+        request.filters = this.tables[this.activeTab]?.filters;
+      }
+
+      const { jobId, total, skipped = 0 } = await startEnrichment(request);
       let message;
       if (autoTriggered) {
         if (limitValue != null) {
@@ -1587,10 +1808,6 @@ class Dashboard {
     } catch (error) {
       this.enrichmentBusy = false;
       this.el.enrichBtn.disabled = false;
-      this.el.enrichEmailBtn.disabled = false;
-      if (this.el.enrichMenuFullBtn) {
-        this.el.enrichMenuFullBtn.disabled = false;
-      }
       this.renderTable();
       if (autoTriggered && limitValue != null && limitValue > 0) {
         this.pendingAutoEnrich += Number(limitValue);
@@ -1603,6 +1820,16 @@ class Dashboard {
 
   isAutoEnrichEnabled() {
     return Boolean(this.discoverySettings?.autoEnrichEnabled);
+  }
+
+  getAutoEnrichOptions() {
+    const settings = this.discoverySettings || defaultDiscoverySettingsState();
+    if (settings.autoEnrichOptions) {
+      return normalizeEnrichmentOptions(settings.autoEnrichOptions);
+    }
+    return settings.autoEnrichMode === 'full'
+      ? defaultEnrichmentOptions()
+      : emailOnlyEnrichmentOptions();
   }
 
   async triggerAutoEnrich(newChannelsCount) {
@@ -1622,8 +1849,12 @@ class Dashboard {
       }
       return;
     }
-    const mode = this.discoverySettings?.autoEnrichMode === 'full' ? 'full' : 'email_only';
-    await this.handleEnrich(mode, { limitOverride: count, autoTriggered: true });
+    const options = this.getAutoEnrichOptions();
+    await this.handleEnrich(options, {
+      limitOverride: count,
+      autoTriggered: true,
+      scope: 'all_active',
+    });
   }
 
   async processPendingAutoEnrich() {
@@ -1999,10 +2230,6 @@ class Dashboard {
             this.eventSource = null;
             this.enrichmentBusy = false;
             this.el.enrichBtn.disabled = false;
-            this.el.enrichEmailBtn.disabled = false;
-            if (this.el.enrichMenuFullBtn) {
-              this.el.enrichMenuFullBtn.disabled = false;
-            }
             this.setProgress('');
             const skipped = payload.skipped ?? 0;
             const requested = payload.requested;
@@ -2046,10 +2273,6 @@ class Dashboard {
       this.eventSource = null;
       this.enrichmentBusy = false;
       this.el.enrichBtn.disabled = false;
-      this.el.enrichEmailBtn.disabled = false;
-      if (this.el.enrichMenuFullBtn) {
-        this.el.enrichMenuFullBtn.disabled = false;
-      }
       this.renderTable();
     };
   }
