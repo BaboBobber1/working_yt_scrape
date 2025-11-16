@@ -193,12 +193,13 @@ class EnrichmentManager:
         force_run: bool = False,
         never_reenrich: bool = False,
     ) -> EnrichmentJob:
-        if mode not in {"full", "email_only"}:
-            raise ValueError(f"Unsupported enrichment mode: {mode}")
+        if options is None and mode not in {"full", "email_only"}:
+            mode = "full"
 
         effective_options = options or (
             EnrichmentOptions.email_only() if mode == "email_only" else EnrichmentOptions.full()
         )
+        mode = effective_options.mode_label()
         email_only_mode = effective_options.is_email_only()
 
         channels = database.get_enrichment_candidates(
@@ -213,7 +214,7 @@ class EnrichmentManager:
         job = EnrichmentJob(
             job_id=job_id,
             channels=filtered,
-            mode=effective_options.mode_label(),
+            mode=mode,
             options=effective_options,
             requested=len(channels),
             skipped=len(skipped),

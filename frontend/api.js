@@ -160,6 +160,17 @@ export async function startEnrichment(config = {}) {
   });
 }
 
+export async function fetchEnrichmentSettings() {
+  return request('/api/enrichment/settings');
+}
+
+export async function saveEnrichmentSettings(options) {
+  return request('/api/enrichment/settings', {
+    method: 'POST',
+    body: JSON.stringify(options || {}),
+  });
+}
+
 export async function fetchStats() {
   return request('/api/stats');
 }

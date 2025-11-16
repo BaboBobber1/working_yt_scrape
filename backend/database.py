@@ -1,6 +1,7 @@
 """Database utilities for the Crypto YouTube Harvester backend."""
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import threading
@@ -67,6 +68,15 @@ class DiscoveryKeywordState:
 
 PROJECT_BUNDLE_SCHEMA_VERSION = 1
 
+DEFAULT_ENRICHMENT_CONFIG = {
+    "emails_from_channel": True,
+    "emails_from_videos": True,
+    "language_basic": True,
+    "language_precise": True,
+    "update_metadata": True,
+    "update_activity": True,
+}
+
 CHANNEL_COLUMNS = [
     "channel_id",
     "name",
@@ -98,11 +108,38 @@ def _normalize_discovery_keyword(keyword: str) -> str:
     return cleaned.lower()
 
 
+def _normalize_enrichment_config(payload: Any) -> Dict[str, bool]:
+    if not isinstance(payload, dict):
+        return {**DEFAULT_ENRICHMENT_CONFIG}
+    normalized: Dict[str, bool] = {}
+    for key, default in DEFAULT_ENRICHMENT_CONFIG.items():
+        normalized[key] = bool(payload.get(key, default))
+    return normalized
+
+
 def _ensure_column(cursor: sqlite3.Cursor, table: str, column: str, definition: str) -> None:
     cursor.execute(f"PRAGMA table_info({table})")
     existing = {row["name"] for row in cursor.fetchall()}
     if column not in existing:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _ensure_enrichment_settings(cursor: sqlite3.Cursor) -> None:
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS enrichment_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            payload TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute("SELECT payload FROM enrichment_settings WHERE id = 1")
+    exists = cursor.fetchone()
+    if not exists:
+        cursor.execute(
+            "INSERT INTO enrichment_settings (id, payload) VALUES (1, ?)",
+            (json.dumps(DEFAULT_ENRICHMENT_CONFIG),),
+        )
 
 
 def init_db() -> None:
@@ -144,6 +181,8 @@ def init_db() -> None:
                 f"UPDATE {table} SET archived_at = last_status_change "
                 "WHERE archived_at IS NULL AND status = 'archived' AND last_status_change IS NOT NULL"
             )
+
+        _ensure_enrichment_settings(cursor)
 
         cursor.execute(
             """
@@ -432,6 +471,40 @@ def update_discovery_keyword_state(
         no_new_pages=safe_no_new,
         updated_at=timestamp,
     )
+
+
+def get_enrichment_settings() -> Dict[str, bool]:
+    """Return the persisted enrichment configuration, seeding defaults if missing."""
+
+    with get_cursor() as cursor:
+        _ensure_enrichment_settings(cursor)
+        cursor.execute("SELECT payload FROM enrichment_settings WHERE id = 1")
+        row = cursor.fetchone()
+        stored_payload: Dict[str, Any] = {}
+        if row and row["payload"]:
+            try:
+                stored_payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                stored_payload = {}
+        normalized = _normalize_enrichment_config(stored_payload)
+        cursor.execute(
+            "UPDATE enrichment_settings SET payload = ? WHERE id = 1",
+            (json.dumps(normalized),),
+        )
+    return normalized
+
+
+def save_enrichment_settings(options: Dict[str, Any]) -> Dict[str, bool]:
+    """Persist the enrichment configuration and return the normalized state."""
+
+    normalized = _normalize_enrichment_config(options)
+    with get_cursor() as cursor:
+        _ensure_enrichment_settings(cursor)
+        cursor.execute(
+            "INSERT OR REPLACE INTO enrichment_settings (id, payload) VALUES (1, ?)",
+            (json.dumps(normalized),),
+        )
+    return normalized
 
 
 def is_blacklisted(channel_id: str) -> bool:

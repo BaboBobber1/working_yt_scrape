@@ -352,13 +352,12 @@
                 <label class="modal-toggle">
                   <input type="checkbox" id="discoverAutoEnrichToggle" /> Auto-enrich discovered channels
                 </label>
-                <select id="discoverAutoEnrichMode">
-                  <option value="email_only">Email only</option>
-                  <option value="full">Normal</option>
-                </select>
                 <p class="modal-hint">
-                  Auto-enrich uses the saved enrichment settings. "Email only" limits to the quick email preset.
+                  Auto-enrich uses the saved enrichment settings (same as the Enrich button).
                 </p>
+                <button type="button" class="btn btn--outline" id="discoverOpenEnrichmentSettings">
+                  Open enrichment settings…
+                </button>
               </div>
               <div class="modal-field">
                 <label for="enrichLimit">Enrich limit (optional)</label>
