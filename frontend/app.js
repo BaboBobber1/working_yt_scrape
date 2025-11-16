@@ -311,21 +311,20 @@ function describeEnrichmentOptions(options) {
   return parts.join(', ');
 }
 
-function defaultDiscoverySettingsState() {
-  return {
-    keywordsText: DEFAULT_DISCOVERY_KEYWORDS,
-    keywords: parseDiscoveryKeywords(DEFAULT_DISCOVERY_KEYWORDS),
-    perKeyword: 5,
-    lastUploadMaxAgeDays: null,
-    denyLanguagesText: '',
-    denyLanguages: [],
-    autoEnrichEnabled: false,
-    autoEnrichMode: 'email_only',
-    autoEnrichOptions: emailOnlyEnrichmentOptions(),
-    enrichLimit: null,
-    runUntilStopped: false,
-  };
-}
+  function defaultDiscoverySettingsState() {
+    return {
+      keywordsText: DEFAULT_DISCOVERY_KEYWORDS,
+      keywords: parseDiscoveryKeywords(DEFAULT_DISCOVERY_KEYWORDS),
+      perKeyword: 5,
+      lastUploadMaxAgeDays: null,
+      denyLanguagesText: '',
+      denyLanguages: [],
+      autoEnrichEnabled: false,
+      autoEnrichMode: 'email_only',
+      enrichLimit: null,
+      runUntilStopped: false,
+    };
+  }
 
 class Dashboard {
   constructor(root) {
@@ -713,11 +712,10 @@ class Dashboard {
       }
     }
 
-    const autoEnrichMode = raw.autoEnrichMode === 'full' ? 'full' : 'email_only';
+    const autoEnrichMode = ['full', 'email_only'].includes(raw.autoEnrichMode)
+      ? raw.autoEnrichMode
+      : 'email_only';
     const autoEnrichEnabled = Boolean(raw.autoEnrichEnabled);
-    const autoEnrichFallback =
-      autoEnrichMode === 'full' ? defaultEnrichmentOptions() : emailOnlyEnrichmentOptions();
-    const autoEnrichOptions = normalizeEnrichmentOptions(raw.autoEnrichOptions, autoEnrichFallback);
     const runUntilStopped = Boolean(raw.runUntilStopped);
 
     return {
@@ -730,7 +728,6 @@ class Dashboard {
       enrichLimit,
       autoEnrichEnabled,
       autoEnrichMode,
-      autoEnrichOptions,
       runUntilStopped,
     };
   }
@@ -818,12 +815,8 @@ class Dashboard {
       parts.push(`Enrich limit: ${formatNumber(settings.enrichLimit)}`);
     }
     if (settings.autoEnrichEnabled) {
-      const description = describeEnrichmentOptions(
-        settings.autoEnrichOptions ||
-          (settings.autoEnrichMode === 'full'
-            ? defaultEnrichmentOptions()
-            : emailOnlyEnrichmentOptions()),
-      );
+      const { options } = this.getAutoEnrichConfig();
+      const description = describeEnrichmentOptions(options);
       parts.push(`Auto enrich: ${description}`);
     } else {
       parts.push('Auto enrich: off');
@@ -1004,8 +997,6 @@ class Dashboard {
     const autoEnrichEnabled = Boolean(this.el.discoverAutoEnrichToggle?.checked);
     const autoEnrichMode =
       this.el.discoverAutoEnrichMode?.value === 'full' ? 'full' : 'email_only';
-    const autoEnrichOptions =
-      autoEnrichMode === 'full' ? defaultEnrichmentOptions() : emailOnlyEnrichmentOptions();
     const runUntilStopped = Boolean(this.el.discoverRunUntilStopped?.checked);
 
     return {
@@ -1018,7 +1009,6 @@ class Dashboard {
       enrichLimit,
       autoEnrichEnabled,
       autoEnrichMode,
-      autoEnrichOptions,
       runUntilStopped,
     };
   }
@@ -1883,7 +1873,13 @@ class Dashboard {
     if (this.enrichmentBusy) {
       return;
     }
-    const { limitOverride = null, autoTriggered = false, scope: scopeOverride = null } = overrides;
+    const {
+      limitOverride = null,
+      autoTriggered = false,
+      scope: scopeOverride = null,
+      emailMode: emailModeOverride = null,
+      languageMode: languageModeOverride = null,
+    } = overrides;
     let limitValue = null;
     if (limitOverride != null) {
       limitValue = Number(limitOverride);
@@ -1899,11 +1895,11 @@ class Dashboard {
       options || this.enrichmentSettings?.options || defaultEnrichmentOptions(),
     );
     const emailMode =
-      overrides.emailMode ||
+      emailModeOverride ||
       this.enrichmentSettings?.emailMode ||
       deriveEmailModeFromOptions(appliedOptions);
     const languageMode =
-      overrides.languageMode ||
+      languageModeOverride ||
       this.enrichmentSettings?.languageMode ||
       deriveLanguageModeFromOptions(appliedOptions);
     const scope = scopeOverride || this.enrichmentSettings?.scope || 'filtered';
@@ -1963,14 +1959,33 @@ class Dashboard {
     return Boolean(this.discoverySettings?.autoEnrichEnabled);
   }
 
-  getAutoEnrichOptions() {
-    const settings = this.discoverySettings || defaultDiscoverySettingsState();
-    if (settings.autoEnrichOptions) {
-      return normalizeEnrichmentOptions(settings.autoEnrichOptions);
+  getAutoEnrichConfig() {
+    const discoverySettings = this.discoverySettings || defaultDiscoverySettingsState();
+    const enrichmentSettings = this.enrichmentSettings || defaultEnrichmentSettingsState();
+    const baseOptions = normalizeEnrichmentOptions(enrichmentSettings.options);
+    let emailMode = enrichmentSettings.emailMode || deriveEmailModeFromOptions(baseOptions);
+    let languageMode =
+      enrichmentSettings.languageMode || deriveLanguageModeFromOptions(baseOptions);
+
+    let options = normalizeEnrichmentOptions({
+      ...baseOptions,
+      ...emailOptionsFromMode(emailMode),
+      ...languageOptionsFromMode(languageMode),
+    });
+
+    if (discoverySettings.autoEnrichMode !== 'full') {
+      emailMode = 'channel_only';
+      languageMode = 'off';
+      options = normalizeEnrichmentOptions({
+        ...options,
+        ...emailOptionsFromMode(emailMode),
+        ...languageOptionsFromMode(languageMode),
+        update_metadata: false,
+        update_activity: false,
+      });
     }
-    return settings.autoEnrichMode === 'full'
-      ? defaultEnrichmentOptions()
-      : emailOnlyEnrichmentOptions();
+
+    return { options, emailMode, languageMode };
   }
 
   async triggerAutoEnrich(newChannelsCount) {
@@ -1990,11 +2005,13 @@ class Dashboard {
       }
       return;
     }
-    const options = this.getAutoEnrichOptions();
+    const { options, emailMode, languageMode } = this.getAutoEnrichConfig();
     await this.handleEnrich(options, {
       limitOverride: count,
       autoTriggered: true,
       scope: 'all_active',
+      emailMode,
+      languageMode,
     });
   }
 
