@@ -666,6 +666,54 @@ def extract_emails(texts: Iterable[str]) -> List[str]:
     return unique
 
 
+def _clean_telegram_username(username: str) -> Optional[str]:
+    candidate = username.strip().lstrip("@")
+    if not candidate:
+        return None
+    if "." in candidate:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,}", candidate):
+        return None
+    return candidate
+
+
+def _contact_weight(text: str, index: int) -> int:
+    window = text[max(0, index - 20) : index + 20].lower()
+    keywords = ["contact", "business", "dm", "message", "inquiry"]
+    return 2 if any(keyword in window for keyword in keywords) else 1
+
+
+def extract_telegram_account(texts: Iterable[str]) -> Optional[str]:
+    link_pattern = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/([A-Za-z0-9_]{3,})", re.IGNORECASE)
+    handle_pattern = re.compile(r"(?<![\w.])@([A-Za-z0-9_]{3,})")
+
+    candidates: List[Tuple[int, int, str]] = []
+    for text in texts:
+        if not text:
+            continue
+        for match in link_pattern.finditer(text):
+            username = _clean_telegram_username(match.group(1))
+            if not username:
+                continue
+            weight = _contact_weight(text, match.start())
+            candidates.append((weight, match.start(), username))
+        for match in handle_pattern.finditer(text):
+            username = _clean_telegram_username(match.group(1))
+            if not username:
+                continue
+            tail = text[match.end() : match.end() + 2]
+            if tail.startswith("."):
+                continue
+            weight = _contact_weight(text, match.start())
+            candidates.append((weight, match.start(), username))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda entry: (-entry[0], entry[1]))
+    return candidates[0][2]
+
+
 def _fetch_rss(channel_id: str, timeout: int = 8) -> Tuple[str, Optional[str], Dict[str, Optional[str]]]:
     RATE_LIMITER.wait()
     response = SESSION.get(RSS_TEMPLATE.format(channel_id=channel_id), timeout=timeout)
@@ -849,6 +897,7 @@ def enrich_channel_with_options(
     language_precise = _option_enabled(options, "language_precise", True)
     update_metadata = _option_enabled(options, "update_metadata", True)
     update_activity = _option_enabled(options, "update_activity", True)
+    telegram_enabled = _option_enabled(options, "telegram_enrichment", True)
 
     needs_feed = any(
         [emails_from_videos, language_basic, language_precise, update_metadata, update_activity]
@@ -870,6 +919,7 @@ def enrich_channel_with_options(
 
     emails: List[str] = []
     email_gate_present: Optional[bool] = None
+    about_text: Optional[str] = None
 
     if emails_from_videos and combined_description:
         emails.extend(extract_emails([combined_description]))
@@ -878,8 +928,12 @@ def enrich_channel_with_options(
     elif emails_from_channel and feed_description:
         emails.extend(extract_emails([feed_description]))
 
-    if emails_from_channel:
-        about_emails, gate_present = _fetch_about_emails(channel)
+    if emails_from_channel or telegram_enabled:
+        about_result = _fetch_about_emails(channel, return_text=telegram_enabled)
+        if telegram_enabled:
+            about_emails, gate_present, about_text = about_result  # type: ignore[misc]
+        else:
+            about_emails, gate_present = about_result  # type: ignore[misc]
         if gate_present and email_gate_present is None:
             email_gate_present = gate_present
         emails.extend(about_emails)
@@ -898,6 +952,8 @@ def enrich_channel_with_options(
     if unique_emails:
         email_gate_present = False
 
+    telegram_account: Optional[str] = None
+
     language: Optional[str] = None
     language_confidence: Optional[float] = None
     if language_precise and combined_texts:
@@ -914,6 +970,12 @@ def enrich_channel_with_options(
         if not last_updated and video:
             last_updated = video.get("timestamp")
 
+    if telegram_enabled:
+        telegram_sources = list(combined_texts)
+        if about_text:
+            telegram_sources.append(about_text)
+        telegram_account = extract_telegram_account(telegram_sources)
+
     return {
         "name": feed_title or channel.get("name") or channel.get("title"),
         "subscribers": watch.get("subscribers") if update_metadata and watch else None,
@@ -922,6 +984,7 @@ def enrich_channel_with_options(
         "emails": unique_emails if (emails_from_channel or emails_from_videos) else [],
         "last_updated": last_updated,
         "email_gate_present": email_gate_present,
+        "telegram_account": telegram_account,
     }
 
 
@@ -939,8 +1002,8 @@ def _resolve_about_url(channel: Dict[str, Optional[str]]) -> str:
 
 
 def _fetch_about_emails(
-    channel: Dict[str, Optional[str]], timeout: int = 5
-) -> Tuple[List[str], bool]:
+    channel: Dict[str, Optional[str]], timeout: int = 5, *, return_text: bool = False
+) -> Tuple[List[str], bool] | Tuple[List[str], bool, str]:
     about_url = _resolve_about_url(channel)
     RATE_LIMITER.wait()
     try:
@@ -965,6 +1028,8 @@ def _fetch_about_emails(
     gate_present = False
     if not unique_emails and "view email address" in page_text.lower():
         gate_present = True
+    if return_text:
+        return unique_emails, gate_present, page_text
     return unique_emails, gate_present
 
 
@@ -992,14 +1057,18 @@ def _fetch_latest_video_metadata(channel_id: str) -> Optional[Dict[str, Optional
     }
 
 
-def enrich_channel_email_only(channel: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
+def enrich_channel_email_only(
+    channel: Dict[str, Optional[str]], *, telegram_enabled: bool = True
+) -> Dict[str, Optional[str]]:
     channel_id = channel.get("channel_id")
     if not channel_id:
         raise EnrichmentError("Missing channel id")
 
     emails: List[str] = []
+    telegram_account: Optional[str] = None
 
-    about_emails, about_gate = _fetch_about_emails(channel)
+    about_text: Optional[str] = None
+    about_emails, about_gate, about_text = _fetch_about_emails(channel, return_text=True)
     email_gate_present: Optional[bool] = about_gate
     if about_emails:
         emails.extend(about_emails)
@@ -1007,6 +1076,7 @@ def enrich_channel_email_only(channel: Dict[str, Optional[str]]) -> Dict[str, Op
 
     video = _fetch_latest_video_metadata(channel_id)
     last_updated = None
+    candidate_texts: List[str] = []
     if video:
         candidate_texts = [video.get("title", ""), video.get("description", ""), video.get("feed_description", "")]
         emails.extend(extract_emails(candidate_texts))
@@ -1029,8 +1099,17 @@ def enrich_channel_email_only(channel: Dict[str, Optional[str]]) -> Dict[str, Op
     if unique_emails:
         email_gate_present = False
 
+    telegram_sources = list(candidate_texts)
+    if about_text:
+        telegram_sources.append(about_text)
+    if telegram_enabled:
+        telegram_account = extract_telegram_account(telegram_sources)
+    else:
+        telegram_account = None
+
     return {
         "emails": unique_emails,
         "last_updated": last_updated,
         "email_gate_present": email_gate_present,
+        "telegram_account": telegram_account,
     }
