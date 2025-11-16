@@ -299,12 +299,16 @@
             <h3 class="modal-section__title">Email enrichment</h3>
             <div class="modal-switches">
               <label class="modal-toggle">
-                <input type="checkbox" id="enrichEmailsChannel" />
-                Scan channel description for emails (fast)
+                <input type="checkbox" id="enrichEmailsEnabled" />
+                Enable email enrichment
               </label>
-              <label class="modal-toggle">
-                <input type="checkbox" id="enrichEmailsVideos" />
-                Scan recent video descriptions for emails (slow / full)
+              <label class="modal-toggle modal-select">
+                <span>Email search mode</span>
+                <select id="enrichEmailsMode">
+                  <option value="channel_and_videos">Channel + recent video descriptions (full)</option>
+                  <option value="channel_only">Channel description only (fast)</option>
+                  <option value="videos_only">Recent video descriptions only</option>
+                </select>
               </label>
             </div>
           </section>
@@ -312,12 +316,15 @@
             <h3 class="modal-section__title">Language detection</h3>
             <div class="modal-switches">
               <label class="modal-toggle">
-                <input type="checkbox" id="enrichLanguageBasic" />
-                Basic language detection
+                <input type="checkbox" id="enrichLanguageEnabled" />
+                Enable language detection
               </label>
-              <label class="modal-toggle">
-                <input type="checkbox" id="enrichLanguagePrecise" />
-                Precise language detection
+              <label class="modal-toggle modal-select">
+                <span>Language detection mode</span>
+                <select id="enrichLanguageMode">
+                  <option value="fast">Fast (basic only)</option>
+                  <option value="precise">Precise (slower, more accurate)</option>
+                </select>
               </label>
             </div>
           </section>

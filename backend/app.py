@@ -971,7 +971,18 @@ def api_enrich(payload: Dict[str, Any] = Body(default={})) -> JSONResponse:
     filters = _collect_filters_from_payload(payload.get("filters")) if scope == "filtered" else None
 
     options_payload = payload.get("options")
-    options = EnrichmentOptions.from_payload(options_payload) if options_payload is not None else None
+    emails_mode = payload.get("emails_mode") or payload.get("emailsMode")
+    language_mode = payload.get("language_mode") or payload.get("languageMode")
+    options: Optional[EnrichmentOptions] = None
+    if options_payload is not None or emails_mode or language_mode:
+        base_options = (
+            EnrichmentOptions.from_payload(options_payload) if options_payload is not None else None
+        )
+        options = EnrichmentOptions.with_modes(
+            base=base_options,
+            emails_mode=emails_mode,
+            language_mode=language_mode,
+        )
 
     job = manager.start_job(
         limit,
