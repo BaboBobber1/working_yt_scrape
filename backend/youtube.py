@@ -796,20 +796,32 @@ def _resolve_language_votes(
     sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     top_lang, top_score = sorted_scores[0]
     second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
+    total_score = sum(score for _, score in sorted_scores) or 1.0
 
-    ambiguous = second_score and (top_score - second_score) <= 0.05 * max(top_score, 1.0)
-    if ambiguous and fallback_result:
-        return fallback_result.get("language"), fallback_result.get("confidence")
+    clear_majority = (top_score / total_score) >= 0.55 or top_score >= (second_score * 1.2)
+    if clear_majority:
+        confidence = top_score / (top_score + second_score + 1e-9)
+        if fallback_result and fallback_result.get("language") == top_lang:
+            confidence = max(confidence, float(fallback_result.get("confidence") or 0.0))
+        return top_lang, confidence
 
-    confidence = top_score / (top_score + second_score + 1e-9)
-    if fallback_result and fallback_result.get("language") == top_lang:
-        confidence = max(confidence, float(fallback_result.get("confidence") or 0.0))
+    if fallback_result and fallback_result.get("language"):
+        fallback_lang = fallback_result.get("language")
+        fallback_confidence = float(fallback_result.get("confidence") or 0.0)
+        if fallback_lang in scores:
+            boosted_confidence = max(
+                fallback_confidence, scores[fallback_lang] / (total_score + 1e-9)
+            )
+            return fallback_lang, boosted_confidence
+        return fallback_lang, fallback_confidence
 
-    return top_lang, confidence
+    return None, None
 
 
 def extract_emails(texts: Iterable[str]) -> List[str]:
-    pattern = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+    pattern = re.compile(
+        r"(?i)(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.+-])"
+    )
     found: List[str] = []
     for text in texts:
         if not text:
@@ -1140,13 +1152,7 @@ def enrich_channel_with_options(
     email_gate_present: Optional[bool] = None
     about_text: Optional[str] = None
 
-    if emails_from_videos and combined_description:
-        emails.extend(extract_emails([combined_description]))
-        if feed_description:
-            emails.extend(extract_emails([feed_description]))
-    elif emails_from_channel and feed_description:
-        emails.extend(extract_emails([feed_description]))
-
+    about_emails: List[str] = []
     if emails_from_channel or telegram_enabled:
         about_result = _fetch_about_emails(channel, return_text=telegram_enabled)
         if telegram_enabled:
@@ -1155,7 +1161,15 @@ def enrich_channel_with_options(
             about_emails, gate_present = about_result  # type: ignore[misc]
         if gate_present and email_gate_present is None:
             email_gate_present = gate_present
-        emails.extend(about_emails)
+        if emails_from_channel:
+            emails.extend(about_emails)
+
+    if emails_from_videos and combined_description:
+        video_emails: List[str] = []
+        video_emails.extend(extract_emails([combined_description]))
+        if feed_description:
+            video_emails.extend(extract_emails([feed_description]))
+        emails.extend(video_emails)
 
     unique_emails: List[str] = []
     seen: Set[str] = set()
