@@ -324,6 +324,8 @@ function describeEnrichmentOptions(options) {
       keywordsText: DEFAULT_DISCOVERY_KEYWORDS,
       keywords: parseDiscoveryKeywords(DEFAULT_DISCOVERY_KEYWORDS),
       perKeyword: 5,
+      minSubscribers: 0,
+      minPublicUploads: 0,
       lastUploadMaxAgeDays: null,
       denyLanguagesText: '',
       denyLanguages: [],
@@ -415,6 +417,8 @@ class Dashboard {
       systemStatusBar: this.root.querySelector('#systemStatusBar'),
       discoverKeywords: document.getElementById('discoverKeywords'),
       discoverPerKeyword: document.getElementById('discoverPerKeyword'),
+      discoverMinSubscribers: document.getElementById('discoverMinSubscribers'),
+      discoverMinPublicUploads: document.getElementById('discoverMinPublicUploads'),
       discoverDenyLanguages: document.getElementById('discoverDenyLanguages'),
       discoverLastUploadMaxAge: document.getElementById('discoverLastUploadMaxAge'),
       discoverBtn: this.root.querySelector('#discoverBtn'),
@@ -685,6 +689,22 @@ class Dashboard {
         ? defaults.perKeyword
         : Math.max(1, Math.floor(perKeywordRaw));
 
+    const minSubscribersRaw = Number(
+      raw.minSubscribers ?? raw.min_subscribers ?? defaults.minSubscribers,
+    );
+    const minSubscribers =
+      Number.isNaN(minSubscribersRaw) || minSubscribersRaw < 0
+        ? defaults.minSubscribers
+        : Math.floor(minSubscribersRaw);
+
+    const minPublicUploadsRaw = Number(
+      raw.minPublicUploads ?? raw.min_public_uploads ?? defaults.minPublicUploads,
+    );
+    const minPublicUploads =
+      Number.isNaN(minPublicUploadsRaw) || minPublicUploadsRaw < 0
+        ? defaults.minPublicUploads
+        : Math.floor(minPublicUploadsRaw);
+
     let lastUploadMaxAgeDays = null;
     const lastRaw = raw.lastUploadMaxAgeDays;
     if (typeof lastRaw === 'number') {
@@ -726,6 +746,8 @@ class Dashboard {
       keywordsText,
       keywords,
       perKeyword,
+      minSubscribers,
+      minPublicUploads,
       lastUploadMaxAgeDays,
       denyLanguagesText,
       denyLanguages,
@@ -794,6 +816,12 @@ class Dashboard {
       parts.push('Keywords: not set');
     }
     parts.push(`Per keyword: ${formatNumber(settings.perKeyword || 5)}`);
+    if (settings.minSubscribers) {
+      parts.push(`Min subscribers: ${formatNumber(settings.minSubscribers)}`);
+    }
+    if (settings.minPublicUploads) {
+      parts.push(`Min uploads: ${formatNumber(settings.minPublicUploads)}`);
+    }
     if (settings.lastUploadMaxAgeDays != null) {
       parts.push(`Max age: ${formatNumber(settings.lastUploadMaxAgeDays)} days`);
     }
@@ -938,6 +966,12 @@ class Dashboard {
     if (this.el.discoverPerKeyword) {
       this.el.discoverPerKeyword.value = String(settings.perKeyword ?? 5);
     }
+    if (this.el.discoverMinSubscribers) {
+      this.el.discoverMinSubscribers.value = String(settings.minSubscribers ?? 0);
+    }
+    if (this.el.discoverMinPublicUploads) {
+      this.el.discoverMinPublicUploads.value = String(settings.minPublicUploads ?? 0);
+    }
     if (this.el.discoverLastUploadMaxAge) {
       this.el.discoverLastUploadMaxAge.value =
         settings.lastUploadMaxAgeDays != null ? String(settings.lastUploadMaxAgeDays) : '';
@@ -974,6 +1008,20 @@ class Dashboard {
         ? this.discoverySettings?.perKeyword || 5
         : Math.max(1, Math.floor(perKeywordRaw));
 
+    const minSubsRaw = Number(this.el.discoverMinSubscribers?.value ?? '0');
+    if (Number.isNaN(minSubsRaw) || minSubsRaw < 0) {
+      this.updateStatusBar('Min subscribers must be zero or greater.', 'error');
+      return null;
+    }
+    const minSubscribers = Math.floor(minSubsRaw);
+
+    const minUploadsRaw = Number(this.el.discoverMinPublicUploads?.value ?? '0');
+    if (Number.isNaN(minUploadsRaw) || minUploadsRaw < 0) {
+      this.updateStatusBar('Min public uploads must be zero or greater.', 'error');
+      return null;
+    }
+    const minPublicUploads = Math.floor(minUploadsRaw);
+
     const denyLanguagesText = this.el.discoverDenyLanguages?.value ?? '';
     const denyLanguages = parseDiscoveryDenyLanguages(denyLanguagesText);
 
@@ -1006,6 +1054,8 @@ class Dashboard {
       keywordsText,
       keywords,
       perKeyword,
+      minSubscribers,
+      minPublicUploads,
       denyLanguagesText,
       denyLanguages,
       lastUploadMaxAgeDays,
@@ -1027,6 +1077,8 @@ class Dashboard {
       denyLanguages: Array.isArray(settings.denyLanguages)
         ? [...settings.denyLanguages]
         : [],
+      minSubscribers: Math.max(0, Math.floor(Number(settings.minSubscribers) || 0)),
+      minPublicUploads: Math.max(0, Math.floor(Number(settings.minPublicUploads) || 0)),
       lastUploadMaxAgeDays: settings.lastUploadMaxAgeDays,
     };
   }
@@ -1830,6 +1882,12 @@ class Dashboard {
       }
       if (inputs.lastUploadMaxAgeDays != null) {
         requestOptions.lastUploadMaxAgeDays = inputs.lastUploadMaxAgeDays;
+      }
+      if (inputs.minSubscribers != null) {
+        requestOptions.minSubscribers = inputs.minSubscribers;
+      }
+      if (inputs.minPublicUploads != null) {
+        requestOptions.minPublicUploads = inputs.minPublicUploads;
       }
       const response = await discoverChannels(inputs.keywords, inputs.perKeyword, requestOptions);
       let message = `Discovered ${response.found} new channels.`;
