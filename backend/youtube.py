@@ -999,11 +999,24 @@ def _fetch_watch_details(video_id: str, timeout: int = 10) -> Dict[str, Optional
     video_details = player.get("videoDetails", {}) if isinstance(player, dict) else {}
     short_description = html.unescape(video_details.get("shortDescription", ""))
     default_audio_language = video_details.get("defaultAudioLanguage")
+    raw_duration = video_details.get("lengthSeconds")
+    duration_seconds: Optional[int] = None
+    try:
+        if raw_duration is not None:
+            duration_seconds = int(raw_duration)
+    except ValueError:
+        duration_seconds = None
 
     microformat = player.get("microformat", {}) if isinstance(player, dict) else {}
     micro_renderer = microformat.get("playerMicroformatRenderer", {})
     language_hint = micro_renderer.get("language")
     upload_date = micro_renderer.get("uploadDate")
+    is_live = bool(
+        video_details.get("isLiveContent")
+        or micro_renderer.get("isLive")
+        or micro_renderer.get("liveBroadcastDetails")
+    )
+    is_short = bool(duration_seconds is not None and duration_seconds < 60)
 
     caption_languages: List[str] = []
     captions = player.get("captions") if isinstance(player, dict) else None
@@ -1037,6 +1050,9 @@ def _fetch_watch_details(video_id: str, timeout: int = 10) -> Dict[str, Optional
         "caption_languages": caption_languages,
         "upload_date": upload_date,
         "subscribers": subscriber_count,
+        "duration_seconds": duration_seconds,
+        "is_live": is_live,
+        "is_short": is_short,
     }
 
 
@@ -1361,26 +1377,54 @@ def _fetch_about_emails(
 
 def _fetch_latest_video_metadata(channel_id: str) -> Optional[Dict[str, Optional[str]]]:
     try:
-        _, feed_description, video = _fetch_rss(channel_id, timeout=5)
+        _, _, video = _fetch_rss(channel_id, timeout=5)
     except EnrichmentError:
         return None
     except requests.RequestException as exc:  # pragma: no cover - network errors
         raise EnrichmentError(f"Failed to load channel feed: {exc}")
 
-    try:
-        watch = _fetch_watch_details(video["video_id"], timeout=6)
-    except EnrichmentError:
-        watch = {}
-    except requests.RequestException as exc:  # pragma: no cover - network errors
-        raise EnrichmentError(f"Failed to load latest video: {exc}")
+    recent_entries = video.get("recent_entries") or []
+    candidates = recent_entries if recent_entries else [video]
 
-    description = watch.get("description") or video.get("description") or ""
-    return {
-        "title": video.get("title", ""),
-        "description": description,
-        "feed_description": feed_description or "",
-        "timestamp": watch.get("upload_date") or video.get("timestamp"),
-    }
+    for entry in candidates:
+        video_id = entry.get("video_id")
+        if not video_id:
+            continue
+
+        try:
+            watch = _fetch_watch_details(video_id, timeout=6)
+        except EnrichmentError:
+            watch = {}
+        except requests.RequestException as exc:  # pragma: no cover - network errors
+            raise EnrichmentError(f"Failed to load latest video: {exc}")
+
+        if _is_longform_video(watch):
+            description = watch.get("description") or entry.get("description") or ""
+            return {
+                "title": entry.get("title", ""),
+                "description": description,
+                "feed_description": entry.get("description", "") or "",
+                "timestamp": watch.get("upload_date") or entry.get("timestamp"),
+            }
+
+    return None
+
+
+def _is_longform_video(watch: Dict[str, Optional[str]]) -> bool:
+    if not watch:
+        return False
+
+    if watch.get("is_live"):
+        return False
+
+    if watch.get("is_short") is True:
+        return False
+
+    duration_seconds = watch.get("duration_seconds")
+    if isinstance(duration_seconds, int):
+        return duration_seconds >= 60
+
+    return True
 
 
 def enrich_channel_email_only(
