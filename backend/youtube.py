@@ -672,6 +672,8 @@ def _clean_telegram_username(username: str) -> Optional[str]:
         return None
     if "." in candidate:
         return None
+    if candidate.lower() in {"keyframes"}:
+        return None
     if not re.fullmatch(r"[A-Za-z0-9_]{3,}", candidate):
         return None
     return candidate
@@ -1014,6 +1016,9 @@ def _fetch_about_emails(
         return [], False
     response.raise_for_status()
     page_text = html.unescape(response.text)
+    cleaned_text = re.sub(
+        r"<(script|style)[^>]*>.*?</\1>", " ", page_text, flags=re.DOTALL | re.IGNORECASE
+    )
     found_emails = extract_emails([page_text])
     unique_emails: List[str] = []
     seen: Set[str] = set()
@@ -1029,7 +1034,7 @@ def _fetch_about_emails(
     if not unique_emails and "view email address" in page_text.lower():
         gate_present = True
     if return_text:
-        return unique_emails, gate_present, page_text
+        return unique_emails, gate_present, cleaned_text
     return unique_emails, gate_present
 
 
