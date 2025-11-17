@@ -1046,10 +1046,32 @@ def enrich_channel(channel: Dict[str, Optional[str]]) -> Dict[str, Optional[str]
         raise EnrichmentError("Missing channel id")
 
     feed_title, feed_description, video = _fetch_rss(channel_id)
-    watch = _fetch_watch_details(video["video_id"])
+    try:
+        watch = _fetch_watch_details(video["video_id"])
+    except EnrichmentError:
+        # Fall back to feed-only data so we can still extract emails/language from
+        # the latest public video when the watch page is unavailable.
+        watch = {}
 
     combined_description = watch.get("description") or video.get("description") or ""
+
+    # Ensure we always consider the latest public video's description for email
+    # discovery. This explicitly reuses the feed/watch metadata so the "full"
+    # enrichment mode surfaces addresses present only in the newest upload.
+    latest_video = _fetch_latest_video_metadata(channel_id)
+    video_email_texts: List[str] = []
+    if latest_video:
+        if not combined_description:
+            combined_description = latest_video.get("description", "") or combined_description
+        video_email_texts.extend(
+            [
+                latest_video.get("title", ""),
+                latest_video.get("description", ""),
+                latest_video.get("feed_description", ""),
+            ]
+        )
     combined_texts = [video.get("title", ""), combined_description, feed_description or ""]
+    video_email_texts.extend(combined_texts)
 
     language_votes: Dict[str, List[float]] = {}
     detection_texts = [text for text in combined_texts if text]
@@ -1070,9 +1092,7 @@ def enrich_channel(channel: Dict[str, Optional[str]]) -> Dict[str, Optional[str]
 
     lang_result = _resolve_language_votes(language_votes, detection_texts)
 
-    emails = extract_emails([combined_description])
-    if feed_description:
-        emails.extend(extract_emails([feed_description]))
+    emails = extract_emails(video_email_texts)
     # Deduplicate again after combining feed and watch descriptions.
     unique_emails: List[str] = []
     seen = set()
@@ -1140,13 +1160,38 @@ def enrich_channel_with_options(
     watch: Dict[str, Optional[str]] = {}
     if needs_feed:
         feed_title, feed_description, video = _fetch_rss(channel_id)
-        watch = _fetch_watch_details(video["video_id"])
+        try:
+            watch = _fetch_watch_details(video["video_id"])
+        except EnrichmentError:
+            watch = {}
 
     combined_description = ""
     combined_texts: List[str] = []
     if video:
         combined_description = watch.get("description") or video.get("description") or ""
+
+    video_email_texts: List[str] = []
+    if emails_from_videos:
+        try:
+            latest_video = _fetch_latest_video_metadata(channel_id)
+        except EnrichmentError:
+            latest_video = None
+        if latest_video:
+            if not combined_description:
+                combined_description = latest_video.get("description", "") or combined_description
+            video_email_texts.extend(
+                [
+                    latest_video.get("title", ""),
+                    latest_video.get("description", ""),
+                    latest_video.get("feed_description", ""),
+                ]
+            )
+
+    if video:
         combined_texts = [video.get("title", ""), combined_description, feed_description or ""]
+    else:
+        combined_texts = [combined_description, feed_description or ""]
+    video_email_texts.extend(combined_texts)
 
     emails: List[str] = []
     email_gate_present: Optional[bool] = None
@@ -1164,12 +1209,8 @@ def enrich_channel_with_options(
         if emails_from_channel:
             emails.extend(about_emails)
 
-    if emails_from_videos and combined_description:
-        video_emails: List[str] = []
-        video_emails.extend(extract_emails([combined_description]))
-        if feed_description:
-            video_emails.extend(extract_emails([feed_description]))
-        emails.extend(video_emails)
+    if emails_from_videos:
+        emails.extend(extract_emails(video_email_texts))
 
     unique_emails: List[str] = []
     seen: Set[str] = set()
@@ -1191,6 +1232,20 @@ def enrich_channel_with_options(
     language_confidence: Optional[float] = None
     language_votes: Dict[str, List[float]] = {}
     detection_texts = [text for text in combined_texts if text]
+    if language_precise and emails_from_videos:
+        for text in video_email_texts:
+            if text and text not in detection_texts:
+                detection_texts.append(text)
+    watch_language_hint = _normalize_language_code(watch.get("language")) if watch else None
+    audio_language_hint = (
+        _normalize_language_code(watch.get("default_audio_language")) if watch else None
+    )
+    caption_language_hints: List[str] = []
+    if watch:
+        for caption_language in watch.get("caption_languages", []) or []:
+            normalized_caption = _normalize_language_code(caption_language)
+            if normalized_caption:
+                caption_language_hints.append(normalized_caption)
 
     if language_precise:
         if video.get("recent_entries"):
@@ -1205,12 +1260,10 @@ def enrich_channel_with_options(
             )
     if watch:
         if language_precise:
-            _add_language_vote(language_votes, watch.get("language"), weight=1.1)
-            _add_language_vote(
-                language_votes, watch.get("default_audio_language"), weight=1.2
-            )
-            for caption_language in watch.get("caption_languages", []) or []:
-                _add_language_vote(language_votes, caption_language, weight=0.65)
+            _add_language_vote(language_votes, watch_language_hint, weight=1.4)
+            _add_language_vote(language_votes, audio_language_hint, weight=2.1)
+            for caption_language in caption_language_hints:
+                _add_language_vote(language_votes, caption_language, weight=1.05)
             watch_description = watch.get("description") or ""
             if watch_description:
                 detection_texts.append(watch_description)
@@ -1224,6 +1277,15 @@ def enrich_channel_with_options(
 
     if language_precise:
         language, language_confidence = _resolve_language_votes(language_votes, detection_texts)
+        prioritized_hints = [audio_language_hint, watch_language_hint, *caption_language_hints]
+        non_english_hint = next(
+            (code for code in prioritized_hints if code and code != "en"), None
+        )
+        if non_english_hint and (
+            language in {None, "en"} or (language_confidence or 0.0) < 0.65
+        ):
+            language = non_english_hint
+            language_confidence = max(language_confidence or 0.0, 0.66)
 
     last_updated = None
     if update_activity:
