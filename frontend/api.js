@@ -116,6 +116,12 @@ export async function discoverChannels(keywords, perKeyword, options = {}) {
   if (Array.isArray(options.denyLanguages) && options.denyLanguages.length) {
     payload.deny_languages = options.denyLanguages;
   }
+  if (options.minSubscribers != null) {
+    payload.min_subscribers = options.minSubscribers;
+  }
+  if (options.minPublicUploads != null) {
+    payload.min_public_uploads = options.minPublicUploads;
+  }
   return request('/api/discover', {
     method: 'POST',
     body: JSON.stringify(payload),

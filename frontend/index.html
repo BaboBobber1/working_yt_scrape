@@ -236,10 +236,12 @@
             <ul>
               <li>Keywords are expanded line-by-line (commas are also accepted) and normalized before each run.</li>
               <li>Each keyword triggers paginated YouTube searches; paging tokens and page indexes are persisted per keyword so reruns continue where they left off.</li>
-              <li>Optional limits include <em>per keyword</em> result caps, deny-language lists, and "last upload max age" (skips channels with stale activity).</li>
+              <li>Search spans both channel matches and videos (titles, descriptions, tags); video hits feed their channel IDs through the same de-duped discovery flow.</li>
+              <li>Optional limits include <em>per keyword</em> result caps, deny-language lists, subscriber minimums, public-upload minimums, and "last upload max age" (skips channels with stale or missing activity).</li>
               <li>Discovery can run once or continuously via "run until stopped"; continuous mode stops if several pages return no new channels or when safety caps are hit.</li>
               <li>Channel references are sanitized (IDs, handles, user/c paths, hyperlinks) and resolved to canonical URLs + IDs before they are accepted.</li>
               <li>Duplicates are rejected across all categories (active, archived, blacklisted) so the dataset stays unique.</li>
+              <li>Channels without public uploads, with too few uploads, or below the subscriber floor are discarded/blacklisted before reaching the Active list.</li>
               <li>When auto-enrich is enabled, newly discovered channels immediately queue enrichment with the selected mode (email-only or full).</li>
             </ul>
           </section>
@@ -257,7 +259,7 @@
             <ul>
               <li>Jobs run in batches (configurable limit) and stream live progress via server-sent events; the UI shows totals, errors, and pending counts.</li>
               <li>Modes: <strong>Full</strong> (emails from channel + recent videos, precise + fast language detection, metadata + activity refresh) or <strong>Email-only</strong> (channel emails only).</li>
-              <li>Language detection uses both quick and precise passes; detection results store a confidence score.</li>
+              <li>Language detection blends channel text, recent video titles/descriptions, default audio languages, and caption tracks into a majority vote with stored confidence.</li>
               <li>Email extraction inspects channel pages and recent video descriptions; a gate flag notes when YouTube hides emails behind a form.</li>
               <li>Skipped channels: recent "no email" results are remembered for 30 days to avoid redundant work.</li>
               <li>Scopes: current filter vs all active rows; force-run and "never re-enrich" toggles control whether completed channels are eligible.</li>
@@ -453,8 +455,19 @@
                 <input type="number" id="discoverPerKeyword" min="1" />
               </div>
               <div class="modal-field">
+                <label for="discoverMinSubscribers">Min subscribers</label>
+                <input type="number" id="discoverMinSubscribers" min="0" placeholder="0" />
+                <p class="modal-hint">Drop channels below this subscriber floor.</p>
+              </div>
+              <div class="modal-field">
+                <label for="discoverMinPublicUploads">Min public uploads</label>
+                <input type="number" id="discoverMinPublicUploads" min="0" placeholder="0" />
+                <p class="modal-hint">Channels with missing/hidden uploads are discarded immediately.</p>
+              </div>
+              <div class="modal-field">
                 <label for="discoverLastUploadMaxAge">Last upload max age (days)</label>
                 <input type="number" id="discoverLastUploadMaxAge" min="0" placeholder="No limit" />
+                <p class="modal-hint">Channels without public videos fail this filter automatically.</p>
               </div>
               <div class="modal-field modal-field--full">
                 <label for="discoverDenyLanguages">Deny languages</label>

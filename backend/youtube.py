@@ -295,6 +295,9 @@ class DiscoveryMetadata:
     last_upload: Optional[str] = None
     language: Optional[str] = None
     language_confidence: Optional[float] = None
+    upload_count: Optional[int] = None
+    has_public_uploads: Optional[bool] = None
+    subscribers: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +407,19 @@ def _find_channel_renderers(data: Dict) -> Iterable[Dict]:
             stack.extend(node)
 
 
+def _find_video_renderers(data: Dict) -> Iterable[Dict]:
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if "videoRenderer" in node:
+                yield node["videoRenderer"]
+            else:
+                stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+
+
 def _parse_subscriber_count(text: str) -> Optional[int]:
     text = text.replace(" subscribers", "").strip()
     multiplier = 1
@@ -463,14 +479,53 @@ def _build_channel_search_session(config: Dict[str, Any]) -> ChannelSearchSessio
     return ChannelSearchSession(api_key=api_key, context=context_payload)
 
 
+def _channel_from_video_renderer(renderer: Dict[str, Any]) -> Optional[ChannelSearchResult]:
+    owner_text = renderer.get("ownerText") or renderer.get("longBylineText") or {}
+    runs = owner_text.get("runs", []) if isinstance(owner_text, dict) else []
+    channel_id = None
+    channel_name = None
+    channel_url = None
+    for run in runs:
+        browse = run.get("navigationEndpoint", {}).get("browseEndpoint", {})
+        browse_id = browse.get("browseId")
+        if browse_id:
+            channel_id = browse_id
+            channel_url = browse.get("canonicalBaseUrl")
+            channel_name = run.get("text") or channel_name
+            break
+    if not channel_id:
+        channel_id = renderer.get("channelId")
+    if not channel_id:
+        return None
+    if not channel_name:
+        channel_name = renderer.get("ownerText", {}).get("simpleText") or renderer.get(
+            "channelName", ""
+        )
+    if channel_url:
+        channel_url = f"https://www.youtube.com{channel_url}"
+    else:
+        channel_url = f"https://www.youtube.com/channel/{channel_id}"
+
+    return ChannelSearchResult(
+        channel_id=channel_id,
+        title=channel_name,
+        url=channel_url,
+        subscribers=None,
+    )
+
+
 def _collect_channel_results(data: Dict) -> List[ChannelSearchResult]:
     results: List[ChannelSearchResult] = []
     if not isinstance(data, dict):
         return results
+
+    seen: Set[str] = set()
+
     for renderer in _find_channel_renderers(data):
         channel_id = renderer.get("channelId")
-        if not channel_id:
+        if not channel_id or channel_id in seen:
             continue
+        seen.add(channel_id)
         title_runs = renderer.get("title", {}).get("runs", [])
         title = (
             title_runs[0]["text"]
@@ -501,6 +556,13 @@ def _collect_channel_results(data: Dict) -> List[ChannelSearchResult]:
                 subscribers=subscribers,
             )
         )
+
+    for renderer in _find_video_renderers(data):
+        candidate = _channel_from_video_renderer(renderer)
+        if candidate and candidate.channel_id not in seen:
+            seen.add(candidate.channel_id)
+            results.append(candidate)
+
     return results
 
 
@@ -589,15 +651,24 @@ def search_channels(keyword: str, limit: int) -> List[ChannelSearchResult]:
 def fetch_discovery_metadata(channel_id: str) -> DiscoveryMetadata:
     """Return lightweight metadata useful during discovery filtering."""
 
+    upload_count: Optional[int] = None
+    has_public_uploads: Optional[bool] = None
+    feed_description: Optional[str] = None
+    recent_entries: List[Dict[str, Optional[str]]] = []
+
     try:
         _, feed_description, video = _fetch_rss(channel_id)
+        if isinstance(video, dict):
+            upload_count = video.get("video_count")
+            has_public_uploads = upload_count is None or upload_count > 0
+            recent_entries = video.get("recent_entries", []) or []
     except EnrichmentError:
-        return DiscoveryMetadata()
+        return DiscoveryMetadata(upload_count=0, has_public_uploads=False)
     except requests.RequestException:
         return DiscoveryMetadata()
 
     video_id = video.get("video_id") if isinstance(video, dict) else None
-    watch_data: Dict[str, Optional[str]] = {}
+    watch_data: Dict[str, Any] = {}
     if video_id:
         try:
             watch_data = _fetch_watch_details(video_id)
@@ -606,21 +677,37 @@ def fetch_discovery_metadata(channel_id: str) -> DiscoveryMetadata:
         except requests.RequestException:
             watch_data = {}
 
-    combined_texts = [
-        video.get("title", "") if isinstance(video, dict) else "",
-        video.get("description", "") if isinstance(video, dict) else "",
-        feed_description or "",
-        watch_data.get("description", "") if isinstance(watch_data, dict) else "",
-    ]
-    lang_result = detect_language("\n".join(filter(None, combined_texts)))
+    language_votes: Dict[str, List[float]] = {}
+    detection_texts: List[str] = []
 
-    language = None
-    confidence: Optional[float] = None
-    if lang_result:
-        language = lang_result.get("language")
-        confidence = lang_result.get("confidence")
-    elif isinstance(watch_data, dict):
-        language = watch_data.get("language") or None
+    if feed_description:
+        detection_texts.append(feed_description)
+        _add_language_vote_from_text(language_votes, feed_description, weight=0.9)
+
+    if isinstance(video, dict):
+        primary_text = f"{video.get('title', '')}\n{video.get('description', '')}"
+        detection_texts.append(primary_text)
+        _add_language_vote_from_text(language_votes, primary_text, weight=1.0)
+
+    for entry in recent_entries:
+        snippet = f"{entry.get('title', '')}\n{entry.get('description', '')}"
+        if snippet.strip():
+            detection_texts.append(snippet)
+            _add_language_vote_from_text(language_votes, snippet, weight=1.0)
+
+    if isinstance(watch_data, dict):
+        watch_description = watch_data.get("description") or ""
+        if watch_description:
+            detection_texts.append(watch_description)
+            _add_language_vote_from_text(language_votes, watch_description, weight=1.1)
+        _add_language_vote(language_votes, watch_data.get("language"), weight=1.1)
+        _add_language_vote(
+            language_votes, watch_data.get("default_audio_language"), weight=1.2
+        )
+        for caption_language in watch_data.get("caption_languages", []) or []:
+            _add_language_vote(language_votes, caption_language, weight=0.65)
+
+    language, confidence = _resolve_language_votes(language_votes, detection_texts)
 
     last_upload = None
     if isinstance(watch_data, dict):
@@ -628,10 +715,17 @@ def fetch_discovery_metadata(channel_id: str) -> DiscoveryMetadata:
     elif isinstance(video, dict):
         last_upload = video.get("timestamp")
 
+    subscribers = None
+    if isinstance(watch_data, dict):
+        subscribers = watch_data.get("subscribers")
+
     return DiscoveryMetadata(
         last_upload=last_upload,
         language=language,
         language_confidence=confidence,
+        upload_count=upload_count,
+        has_public_uploads=has_public_uploads,
+        subscribers=subscribers,
     )
 
 
@@ -647,6 +741,71 @@ def detect_language(text: str) -> Optional[Dict[str, float]]:
         return None
     best = langs[0]
     return {"language": best.lang, "confidence": float(best.prob)}
+
+
+def _normalize_language_code(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    candidate = str(value).strip().lower()
+    if not candidate:
+        return None
+    if candidate.startswith("vss") and "." in candidate:
+        candidate = candidate.split(".")[-1]
+    candidate = candidate.replace("_", "-")
+    if "-" in candidate:
+        candidate = candidate.split("-", 1)[0]
+    return candidate or None
+
+
+def _add_language_vote(votes: Dict[str, List[float]], code: Optional[str], *, weight: float = 1.0) -> None:
+    normalized = _normalize_language_code(code)
+    if not normalized:
+        return
+    votes.setdefault(normalized, []).append(max(0.0, float(weight)))
+
+
+def _add_language_vote_from_text(
+    votes: Dict[str, List[float]], text: str, *, weight: float = 1.0
+) -> None:
+    result = detect_language(text)
+    if not result:
+        return
+    confidence = result.get("confidence") or 0.0
+    _add_language_vote(
+        votes, result.get("language"), weight=max(0.0, float(weight)) * float(confidence)
+    )
+
+
+def _resolve_language_votes(
+    votes: Dict[str, List[float]], fallback_texts: Iterable[str]
+) -> Tuple[Optional[str], Optional[float]]:
+    fallback_text = "\n".join(text for text in fallback_texts if text and str(text).strip())
+    fallback_result = detect_language(fallback_text) if fallback_text.strip() else None
+
+    if not votes:
+        if fallback_result:
+            return fallback_result.get("language"), fallback_result.get("confidence")
+        return None, None
+
+    scores = {lang: sum(weights) for lang, weights in votes.items()}
+    if not scores:
+        if fallback_result:
+            return fallback_result.get("language"), fallback_result.get("confidence")
+        return None, None
+
+    sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    top_lang, top_score = sorted_scores[0]
+    second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
+
+    ambiguous = second_score and (top_score - second_score) <= 0.05 * max(top_score, 1.0)
+    if ambiguous and fallback_result:
+        return fallback_result.get("language"), fallback_result.get("confidence")
+
+    confidence = top_score / (top_score + second_score + 1e-9)
+    if fallback_result and fallback_result.get("language") == top_lang:
+        confidence = max(confidence, float(fallback_result.get("confidence") or 0.0))
+
+    return top_lang, confidence
 
 
 def extract_emails(texts: Iterable[str]) -> List[str]:
@@ -730,27 +889,51 @@ def _fetch_rss(channel_id: str, timeout: int = 8) -> Tuple[str, Optional[str], D
 
     title = root.findtext("atom:title", default="", namespaces=ATOM_NS)
     description = root.findtext(f"atom:subtitle", default="", namespaces=ATOM_NS)
-    entry = root.find("atom:entry", ATOM_NS)
-    if entry is None:
+    entries = root.findall("atom:entry", ATOM_NS)
+    if not entries:
         raise EnrichmentError("No public videos found in feed")
 
-    video_id = entry.findtext("yt:videoId", default="", namespaces=ATOM_NS)
+    primary_entry = entries[0]
+
+    video_id = primary_entry.findtext("yt:videoId", default="", namespaces=ATOM_NS)
     if not video_id:
         raise EnrichmentError("Unable to read latest video id")
 
-    media_group = entry.find(f"{MEDIA_NS}group")
+    media_group = primary_entry.find(f"{MEDIA_NS}group")
     video_title = media_group.findtext(f"{MEDIA_NS}title", default="") if media_group is not None else ""
     video_description = (
         media_group.findtext(f"{MEDIA_NS}description", default="") if media_group is not None else ""
     )
-    updated = entry.findtext("atom:updated", default="", namespaces=ATOM_NS)
-    published = entry.findtext("atom:published", default="", namespaces=ATOM_NS)
+    updated = primary_entry.findtext("atom:updated", default="", namespaces=ATOM_NS)
+    published = primary_entry.findtext("atom:published", default="", namespaces=ATOM_NS)
+
+    recent_entries: List[Dict[str, Optional[str]]] = []
+    for entry in entries[:5]:
+        entry_media = entry.find(f"{MEDIA_NS}group")
+        entry_title = entry_media.findtext(f"{MEDIA_NS}title", default="") if entry_media is not None else ""
+        entry_description = (
+            entry_media.findtext(f"{MEDIA_NS}description", default="") if entry_media is not None else ""
+        )
+        entry_timestamp = entry.findtext("atom:updated", default="", namespaces=ATOM_NS) or entry.findtext(
+            "atom:published", default="", namespaces=ATOM_NS
+        )
+        entry_video_id = entry.findtext("yt:videoId", default="", namespaces=ATOM_NS)
+        recent_entries.append(
+            {
+                "video_id": entry_video_id or None,
+                "title": entry_title.strip(),
+                "description": entry_description.strip(),
+                "timestamp": entry_timestamp,
+            }
+        )
 
     return title or "", description or None, {
         "video_id": video_id,
         "title": video_title.strip(),
         "description": video_description.strip(),
         "timestamp": updated or published,
+        "video_count": len(entries),
+        "recent_entries": recent_entries,
     }
 
 
@@ -803,11 +986,25 @@ def _fetch_watch_details(video_id: str, timeout: int = 10) -> Dict[str, Optional
 
     video_details = player.get("videoDetails", {}) if isinstance(player, dict) else {}
     short_description = html.unescape(video_details.get("shortDescription", ""))
+    default_audio_language = video_details.get("defaultAudioLanguage")
 
     microformat = player.get("microformat", {}) if isinstance(player, dict) else {}
     micro_renderer = microformat.get("playerMicroformatRenderer", {})
     language_hint = micro_renderer.get("language")
     upload_date = micro_renderer.get("uploadDate")
+
+    caption_languages: List[str] = []
+    captions = player.get("captions") if isinstance(player, dict) else None
+    if isinstance(captions, dict):
+        renderer = captions.get("playerCaptionsTracklistRenderer")
+        if isinstance(renderer, dict):
+            tracks = renderer.get("captionTracks") or []
+            if isinstance(tracks, list):
+                for track in tracks:
+                    if isinstance(track, dict):
+                        code = track.get("languageCode") or track.get("vssId")
+                        if code:
+                            caption_languages.append(str(code))
 
     owner_renderer = _find_first(data, "videoOwnerRenderer") if data else None
     subscriber_count = None
@@ -824,6 +1021,8 @@ def _fetch_watch_details(video_id: str, timeout: int = 10) -> Dict[str, Optional
     return {
         "description": short_description,
         "language": language_hint,
+        "default_audio_language": default_audio_language,
+        "caption_languages": caption_languages,
         "upload_date": upload_date,
         "subscribers": subscriber_count,
     }
@@ -839,7 +1038,25 @@ def enrich_channel(channel: Dict[str, Optional[str]]) -> Dict[str, Optional[str]
 
     combined_description = watch.get("description") or video.get("description") or ""
     combined_texts = [video.get("title", ""), combined_description, feed_description or ""]
-    lang_result = detect_language("\n".join(filter(None, combined_texts)))
+
+    language_votes: Dict[str, List[float]] = {}
+    detection_texts = [text for text in combined_texts if text]
+    if video.get("recent_entries"):
+        for entry in video.get("recent_entries") or []:
+            snippet = f"{entry.get('title', '')}\n{entry.get('description', '')}"
+            if snippet.strip():
+                detection_texts.append(snippet)
+                _add_language_vote_from_text(language_votes, snippet, weight=1.0)
+    if combined_texts:
+        _add_language_vote_from_text(
+            language_votes, "\n".join(filter(None, combined_texts)), weight=1.1
+        )
+    _add_language_vote(language_votes, watch.get("language"), weight=1.1)
+    _add_language_vote(language_votes, watch.get("default_audio_language"), weight=1.2)
+    for caption_language in watch.get("caption_languages", []) or []:
+        _add_language_vote(language_votes, caption_language, weight=0.65)
+
+    lang_result = _resolve_language_votes(language_votes, detection_texts)
 
     emails = extract_emails([combined_description])
     if feed_description:
@@ -867,8 +1084,8 @@ def enrich_channel(channel: Dict[str, Optional[str]]) -> Dict[str, Optional[str]
     return {
         "name": feed_title or channel.get("name") or channel.get("title"),
         "subscribers": watch.get("subscribers"),
-        "language": lang_result["language"] if lang_result else (watch.get("language") or None),
-        "language_confidence": lang_result["confidence"] if lang_result else None,
+        "language": lang_result[0] if lang_result else (watch.get("language") or None),
+        "language_confidence": lang_result[1] if lang_result else None,
         "emails": unique_emails,
         "last_updated": watch.get("upload_date") or video.get("timestamp"),
         "email_gate_present": email_gate_present,
@@ -958,13 +1175,41 @@ def enrich_channel_with_options(
 
     language: Optional[str] = None
     language_confidence: Optional[float] = None
-    if language_precise and combined_texts:
-        lang_result = detect_language("\n".join(filter(None, combined_texts)))
-        if lang_result:
-            language = lang_result.get("language")
-            language_confidence = lang_result.get("confidence")
-    if language is None and language_basic and watch:
-        language = watch.get("language") or None
+    language_votes: Dict[str, List[float]] = {}
+    detection_texts = [text for text in combined_texts if text]
+
+    if language_precise:
+        if video.get("recent_entries"):
+            for entry in video.get("recent_entries") or []:
+                snippet = f"{entry.get('title', '')}\n{entry.get('description', '')}"
+                if snippet.strip():
+                    detection_texts.append(snippet)
+                    _add_language_vote_from_text(language_votes, snippet, weight=1.0)
+        if combined_texts:
+            _add_language_vote_from_text(
+                language_votes, "\n".join(filter(None, combined_texts)), weight=1.1
+            )
+    if watch:
+        if language_precise:
+            _add_language_vote(language_votes, watch.get("language"), weight=1.1)
+            _add_language_vote(
+                language_votes, watch.get("default_audio_language"), weight=1.2
+            )
+            for caption_language in watch.get("caption_languages", []) or []:
+                _add_language_vote(language_votes, caption_language, weight=0.65)
+            watch_description = watch.get("description") or ""
+            if watch_description:
+                detection_texts.append(watch_description)
+                _add_language_vote_from_text(language_votes, watch_description, weight=1.1)
+        if language is None and language_basic:
+            language = (
+                watch.get("language")
+                or watch.get("default_audio_language")
+                or None
+            )
+
+    if language_precise:
+        language, language_confidence = _resolve_language_votes(language_votes, detection_texts)
 
     last_updated = None
     if update_activity:

@@ -273,6 +273,8 @@ class DiscoveryProcessingContext:
     now_dt: dt.datetime
     deny_languages: Set[str]
     last_upload_max_age_days: Optional[int]
+    min_subscribers: int
+    min_public_uploads: int
     requires_metadata: bool
     metadata_cache: Dict[str, DiscoveryMetadata]
 
@@ -330,17 +332,47 @@ def _parse_deny_languages(payload: Dict[str, Any]) -> Set[str]:
     return deny_languages
 
 
+def _parse_non_negative_limit(
+    payload: Dict[str, Any], *, field: str, aliases: Tuple[str, ...] = ()
+) -> int:
+    values_to_check = (field,) + tuple(aliases)
+    raw_value: Any = None
+    for key in values_to_check:
+        raw_value = _unwrap_single_value(payload.get(key))
+        if raw_value not in (None, ""):
+            break
+    if raw_value in (None, ""):
+        return 0
+    if isinstance(raw_value, str):
+        raw_value = raw_value.strip()
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+    if parsed < 0:
+        raise HTTPException(status_code=400, detail=f"{field} cannot be negative")
+    return parsed
+
+
 def _build_discovery_context(
     now_dt: dt.datetime, payload: Dict[str, Any]
 ) -> DiscoveryProcessingContext:
     deny_languages = _parse_deny_languages(payload)
     last_upload_max_age_days = _parse_last_upload_max_age(payload)
-    requires_metadata = bool(deny_languages or last_upload_max_age_days is not None)
+    min_subscribers = _parse_non_negative_limit(
+        payload, field="min_subscribers", aliases=("minSubscribers",)
+    )
+    min_public_uploads = _parse_non_negative_limit(
+        payload, field="min_public_uploads", aliases=("minPublicUploads",)
+    )
+    requires_metadata = True
     return DiscoveryProcessingContext(
         now=now_dt.isoformat(),
         now_dt=now_dt,
         deny_languages=deny_languages,
         last_upload_max_age_days=last_upload_max_age_days,
+        min_subscribers=min_subscribers,
+        min_public_uploads=min_public_uploads,
         requires_metadata=requires_metadata,
         metadata_cache={},
     )
@@ -355,8 +387,33 @@ def _evaluate_discovery_candidate(
         if metadata is None:
             metadata = fetch_discovery_metadata(result.channel_id)
             context.metadata_cache[result.channel_id] = metadata
+    if metadata is None:
+        metadata = DiscoveryMetadata()
 
     violations: List[str] = []
+    subscribers_value = result.subscribers
+    if subscribers_value is None and metadata:
+        subscribers_value = metadata.subscribers
+    if subscribers_value is None:
+        subscribers_value = 0
+    if context.min_subscribers and subscribers_value < context.min_subscribers:
+        violations.append(
+            f"Channel has {subscribers_value} subscribers, below minimum {context.min_subscribers}"
+        )
+
+    uploads_value = metadata.upload_count if metadata else None
+    has_public_uploads = metadata.has_public_uploads if metadata else None
+    if has_public_uploads is False:
+        violations.append("No public uploads found for channel")
+    if context.min_public_uploads:
+        effective_uploads = uploads_value
+        if effective_uploads is None:
+            effective_uploads = 0
+        if effective_uploads < context.min_public_uploads:
+            violations.append(
+                f"Channel has {effective_uploads} public uploads, below minimum {context.min_public_uploads}"
+            )
+
     if context.deny_languages and metadata and metadata.language:
         language_value = str(metadata.language).strip()
         if language_value and language_value.lower() in context.deny_languages:
@@ -364,20 +421,21 @@ def _evaluate_discovery_candidate(
                 f"Language '{language_value}' denied during discovery"
             )
 
-    if (
-        context.last_upload_max_age_days is not None
-        and metadata
-        and metadata.last_upload
-    ):
-        last_upload_dt = _parse_iso_datetime(metadata.last_upload)
-        if last_upload_dt is not None:
-            last_upload_utc = last_upload_dt.astimezone(dt.timezone.utc)
-            age = context.now_dt - last_upload_utc
-            if age > dt.timedelta(days=context.last_upload_max_age_days):
-                violations.append(
-                    "Last upload is older than "
-                    f"{context.last_upload_max_age_days} days (last: {last_upload_utc.date().isoformat()})"
-                )
+    if context.last_upload_max_age_days is not None:
+        if metadata and metadata.last_upload:
+            last_upload_dt = _parse_iso_datetime(metadata.last_upload)
+            if last_upload_dt is not None:
+                last_upload_utc = last_upload_dt.astimezone(dt.timezone.utc)
+                age = context.now_dt - last_upload_utc
+                if age > dt.timedelta(days=context.last_upload_max_age_days):
+                    violations.append(
+                        "Last upload is older than "
+                        f"{context.last_upload_max_age_days} days (last: {last_upload_utc.date().isoformat()})"
+                    )
+        else:
+            violations.append(
+                "No public uploads found; exceeds last upload age limit"
+            )
 
     if violations:
         database.ensure_blacklisted_channel(
@@ -415,6 +473,8 @@ def _evaluate_discovery_candidate(
             payload["language"] = metadata.language
         if metadata.language_confidence is not None:
             payload["language_confidence"] = metadata.language_confidence
+        if metadata.subscribers is not None and payload.get("subscribers") is None:
+            payload["subscribers"] = metadata.subscribers
 
     return payload, False
 
