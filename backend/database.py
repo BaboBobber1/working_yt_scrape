@@ -61,6 +61,10 @@ class DiscoveryKeywordState:
     keyword: str
     next_page_token: Optional[str]
     page_index: int
+    video_next_page_token: Optional[str] = None
+    video_page_index: int = 0
+    video_exhausted: bool = False
+    video_no_new_pages: int = 0
     last_run_at: Optional[str]
     exhausted: bool
     no_new_pages: int
@@ -233,6 +237,10 @@ def init_db() -> None:
                 keyword TEXT PRIMARY KEY,
                 next_page_token TEXT,
                 page_index INTEGER NOT NULL DEFAULT 0,
+                video_next_page_token TEXT,
+                video_page_index INTEGER NOT NULL DEFAULT 0,
+                video_exhausted INTEGER NOT NULL DEFAULT 0,
+                video_no_new_pages INTEGER NOT NULL DEFAULT 0,
                 last_run_at TEXT,
                 exhausted INTEGER NOT NULL DEFAULT 0,
                 no_new_pages INTEGER NOT NULL DEFAULT 0,
@@ -240,6 +248,8 @@ def init_db() -> None:
             )
             """
         )
+
+        _ensure_discovery_state_columns(cursor)
 
         _migrate_legacy_channels(cursor)
 
@@ -257,6 +267,31 @@ def _migrate_legacy_channels(cursor: sqlite3.Cursor) -> None:
     if legacy_count == 0:
         cursor.execute(f"ALTER TABLE {LEGACY_TABLE} RENAME TO {LEGACY_TABLE}_legacy")
         return
+
+
+def _ensure_discovery_state_columns(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("PRAGMA table_info(discovery_keyword_states)")
+    columns = {row[1] for row in cursor.fetchall()}
+    alterations = []
+    if "video_next_page_token" not in columns:
+        alterations.append(
+            "ALTER TABLE discovery_keyword_states ADD COLUMN video_next_page_token TEXT"
+        )
+    if "video_page_index" not in columns:
+        alterations.append(
+            "ALTER TABLE discovery_keyword_states ADD COLUMN video_page_index INTEGER NOT NULL DEFAULT 0"
+        )
+    if "video_exhausted" not in columns:
+        alterations.append(
+            "ALTER TABLE discovery_keyword_states ADD COLUMN video_exhausted INTEGER NOT NULL DEFAULT 0"
+        )
+    if "video_no_new_pages" not in columns:
+        alterations.append(
+            "ALTER TABLE discovery_keyword_states ADD COLUMN video_no_new_pages INTEGER NOT NULL DEFAULT 0"
+        )
+
+    for statement in alterations:
+        cursor.execute(statement)
 
     cursor.execute(f"SELECT * FROM {LEGACY_TABLE}")
     rows = cursor.fetchall()
@@ -377,6 +412,10 @@ def get_discovery_keyword_state(keyword: str) -> DiscoveryKeywordState:
             keyword="",
             next_page_token=None,
             page_index=0,
+            video_next_page_token=None,
+            video_page_index=0,
+            video_exhausted=False,
+            video_no_new_pages=0,
             last_run_at=None,
             exhausted=False,
             no_new_pages=0,
@@ -384,9 +423,23 @@ def get_discovery_keyword_state(keyword: str) -> DiscoveryKeywordState:
         )
 
     with get_cursor() as cursor:
+        cursor.execute("PRAGMA table_info(discovery_keyword_states)")
+        columns = {row["name"] for row in cursor.fetchall()}
+
         cursor.execute(
             """
-            SELECT keyword, next_page_token, page_index, last_run_at, exhausted, no_new_pages, updated_at
+            SELECT
+                keyword,
+                next_page_token,
+                page_index,
+                video_next_page_token,
+                video_page_index,
+                video_exhausted,
+                video_no_new_pages,
+                last_run_at,
+                exhausted,
+                no_new_pages,
+                updated_at
             FROM discovery_keyword_states
             WHERE keyword = ?
             """,
@@ -399,16 +452,33 @@ def get_discovery_keyword_state(keyword: str) -> DiscoveryKeywordState:
             keyword=normalized,
             next_page_token=None,
             page_index=0,
+            video_next_page_token=None,
+            video_page_index=0,
+            video_exhausted=False,
+            video_no_new_pages=0,
             last_run_at=None,
             exhausted=False,
             no_new_pages=0,
             updated_at=None,
         )
 
+    video_token = row["video_next_page_token"] if "video_next_page_token" in columns else None
+    video_index = int(row["video_page_index"] or 0) if "video_page_index" in columns else 0
+    video_exhausted = bool(row["video_exhausted"])
+    if "video_exhausted" not in columns:
+        video_exhausted = False
+    video_no_new = (
+        int(row["video_no_new_pages"] or 0) if "video_no_new_pages" in columns else 0
+    )
+
     return DiscoveryKeywordState(
         keyword=row["keyword"],
         next_page_token=row["next_page_token"],
         page_index=int(row["page_index"] or 0),
+        video_next_page_token=video_token,
+        video_page_index=video_index,
+        video_exhausted=video_exhausted,
+        video_no_new_pages=video_no_new,
         last_run_at=row["last_run_at"],
         exhausted=bool(row["exhausted"]),
         no_new_pages=int(row["no_new_pages"] or 0),
@@ -421,6 +491,10 @@ def update_discovery_keyword_state(
     *,
     next_page_token: Optional[str],
     page_index: int,
+    video_next_page_token: Optional[str],
+    video_page_index: int,
+    video_exhausted: bool,
+    video_no_new_pages: int,
     last_run_at: Optional[str],
     exhausted: bool,
     no_new_pages: int,
@@ -432,6 +506,8 @@ def update_discovery_keyword_state(
         raise ValueError("Discovery keyword cannot be empty")
 
     safe_page_index = max(0, int(page_index))
+    safe_video_page_index = max(0, int(video_page_index))
+    safe_video_no_new = max(0, int(video_no_new_pages))
     safe_no_new = max(0, int(no_new_pages))
     timestamp = last_run_at
 
@@ -442,15 +518,23 @@ def update_discovery_keyword_state(
                 keyword,
                 next_page_token,
                 page_index,
+                video_next_page_token,
+                video_page_index,
+                video_exhausted,
+                video_no_new_pages,
                 last_run_at,
                 exhausted,
                 no_new_pages,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(keyword) DO UPDATE SET
                 next_page_token = excluded.next_page_token,
                 page_index = excluded.page_index,
+                video_next_page_token = excluded.video_next_page_token,
+                video_page_index = excluded.video_page_index,
+                video_exhausted = excluded.video_exhausted,
+                video_no_new_pages = excluded.video_no_new_pages,
                 last_run_at = excluded.last_run_at,
                 exhausted = excluded.exhausted,
                 no_new_pages = excluded.no_new_pages,
@@ -460,6 +544,10 @@ def update_discovery_keyword_state(
                 normalized,
                 next_page_token,
                 safe_page_index,
+                video_next_page_token,
+                safe_video_page_index,
+                int(bool(video_exhausted)),
+                safe_video_no_new,
                 last_run_at,
                 int(bool(exhausted)),
                 safe_no_new,
@@ -471,6 +559,10 @@ def update_discovery_keyword_state(
         keyword=normalized,
         next_page_token=next_page_token,
         page_index=safe_page_index,
+        video_next_page_token=video_next_page_token,
+        video_page_index=safe_video_page_index,
+        video_exhausted=bool(video_exhausted),
+        video_no_new_pages=safe_video_no_new,
         last_run_at=last_run_at,
         exhausted=bool(exhausted),
         no_new_pages=safe_no_new,
