@@ -606,7 +606,46 @@ def _search_initial_page(keyword: str) -> ChannelSearchPage:
     return ChannelSearchPage(results=results, next_page_token=next_token, session=session)
 
 
+def _search_video_initial_page(keyword: str) -> ChannelSearchPage:
+    params = {
+        "search_query": keyword,
+        "sp": "EgIQAQ%3D%3D",  # video filter to prioritize video results
+    }
+    RATE_LIMITER.wait()
+    response = SESSION.get("https://www.youtube.com/results", params=params, timeout=10)
+    response.raise_for_status()
+    html_text = response.text
+    data = _extract_ytinitialdata(html_text)
+    config = _extract_ytcfg(html_text)
+    session = _build_channel_search_session(config)
+    results = _collect_channel_results(data or {})
+    next_token = _extract_next_token(data or {}) if data else None
+    return ChannelSearchPage(results=results, next_page_token=next_token, session=session)
+
+
 def _search_continuation_page(
+    session: ChannelSearchSession, continuation_token: str
+) -> ChannelSearchPage:
+    if not session.api_key or not session.context:
+        return ChannelSearchPage(results=[], next_page_token=None, session=session)
+
+    payload = {"context": session.context, "continuation": continuation_token}
+    params = {"key": session.api_key}
+    RATE_LIMITER.wait()
+    response = SESSION.post(
+        "https://www.youtube.com/youtubei/v1/search",
+        params=params,
+        json=payload,
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    results = _collect_channel_results(data if isinstance(data, dict) else {})
+    next_token = _extract_next_token(data) if isinstance(data, dict) else None
+    return ChannelSearchPage(results=results, next_page_token=next_token, session=session)
+
+
+def _search_video_continuation_page(
     session: ChannelSearchSession, continuation_token: str
 ) -> ChannelSearchPage:
     if not session.api_key or not session.context:
@@ -637,6 +676,17 @@ def search_channels_page(
     if continuation_token and session:
         return _search_continuation_page(session, continuation_token)
     return _search_initial_page(keyword)
+
+
+def search_videos_page(
+    keyword: str,
+    *,
+    session: Optional[ChannelSearchSession] = None,
+    continuation_token: Optional[str] = None,
+) -> ChannelSearchPage:
+    if continuation_token and session:
+        return _search_video_continuation_page(session, continuation_token)
+    return _search_video_initial_page(keyword)
 
 
 def search_channels(keyword: str, limit: int) -> List[ChannelSearchResult]:

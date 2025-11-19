@@ -35,6 +35,7 @@ from .youtube import (
     sanitize_channel_input,
     search_channels,
     search_channels_page,
+    search_videos_page,
 )
 
 app = FastAPI(title="Crypto YouTube Harvester")
@@ -529,15 +530,20 @@ def _run_until_stopped_discovery(
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     state = get_discovery_keyword_state(keyword)
     page_index = max(0, int(state.page_index))
+    video_page_index = max(0, int(state.video_page_index))
     next_token = state.next_page_token
+    video_next_token = state.video_next_page_token
     consecutive_no_new = max(0, int(state.no_new_pages))
-    exhausted_flag = False
+    video_consecutive_no_new = max(0, int(state.video_no_new_pages))
+    channel_exhausted = bool(state.exhausted)
+    video_exhausted = bool(state.video_exhausted)
     stop_requested = False
 
     seen_ids: Set[str] = set()
     new_channels: List[Dict[str, Any]] = []
     total_known = 0
     total_blacklisted = 0
+    status_updates: List[str] = []
     pages_processed = 0
 
     target_new_limit = max(1, int(per_keyword))
@@ -546,11 +552,28 @@ def _run_until_stopped_discovery(
     no_new_threshold = max(1, RUN_UNTIL_STOPPED_NO_NEW_THRESHOLD)
 
     current_token = next_token
+    current_video_token = video_next_token
     session = None
+    video_session = None
     last_run_timestamp: Optional[str] = None
+    status_updates: List[str] = []
+
+    def _persist_state(timestamp: str) -> None:
+        update_discovery_keyword_state(
+            keyword,
+            next_page_token=current_token,
+            page_index=page_index,
+            video_next_page_token=current_video_token,
+            video_page_index=video_page_index,
+            video_exhausted=video_exhausted,
+            video_no_new_pages=video_consecutive_no_new,
+            last_run_at=timestamp,
+            exhausted=channel_exhausted,
+            no_new_pages=consecutive_no_new,
+        )
 
     if page_index > 0 and not current_token:
-        exhausted_flag = True
+        channel_exhausted = True
     else:
         try:
             initial_page = search_channels_page(keyword)
@@ -567,6 +590,9 @@ def _run_until_stopped_discovery(
                 seen_ids=seen_ids,
                 new_channels=new_channels,
             )
+            status_updates.append(
+                f"Keyword: {keyword} – Channel search page {page_index + 1} – {new_in_page} new channels"
+            )
             total_known += known_in_page
             total_blacklisted += blacklisted_in_page
             pages_processed += 1
@@ -577,34 +603,88 @@ def _run_until_stopped_discovery(
             page_index += 1
             current_token = initial_page.next_page_token
             if current_token is None:
-                exhausted_flag = True
+                channel_exhausted = True
             timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
-            update_discovery_keyword_state(
-                keyword,
-                next_page_token=current_token,
-                page_index=page_index,
-                last_run_at=timestamp,
-                exhausted=exhausted_flag,
-                no_new_pages=consecutive_no_new,
-            )
+            _persist_state(timestamp)
             last_run_timestamp = timestamp
         else:
             current_token = next_token
 
+    if video_page_index > 0 and not current_video_token:
+        video_exhausted = True
+    else:
+        try:
+            initial_video_page = search_videos_page(keyword)
+        except Exception as exc:  # pragma: no cover - network errors
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to search videos for keyword '{keyword}': {exc}",
+            ) from exc
+        video_session = initial_video_page.session
+        if video_page_index == 0:
+            new_in_page, known_in_page, blacklisted_in_page = _process_search_results(
+                initial_video_page.results,
+                context=context,
+                seen_ids=seen_ids,
+                new_channels=new_channels,
+            )
+            status_updates.append(
+                f"Keyword: {keyword} – Video search page {video_page_index + 1} – {new_in_page} new channels"
+            )
+            total_known += known_in_page
+            total_blacklisted += blacklisted_in_page
+            pages_processed += 1
+            if new_in_page == 0:
+                video_consecutive_no_new += 1
+            else:
+                video_consecutive_no_new = 0
+            video_page_index += 1
+            current_video_token = initial_video_page.next_page_token
+            if current_video_token is None:
+                video_exhausted = True
+            timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+            _persist_state(timestamp)
+            last_run_timestamp = timestamp
+        else:
+            current_video_token = video_next_token
+
+    source_order = ["channel", "video"]
+    next_source_index = 0
+
     while (
-        not exhausted_flag
-        and not stop_requested
-        and current_token
+        not stop_requested
         and pages_processed < max_pages
         and len(new_channels) < target_new_limit
+        and (not channel_exhausted or not video_exhausted)
     ):
-        if session is None:
-            exhausted_flag = True
+        selected_source: Optional[str] = None
+        for _ in range(len(source_order)):
+            candidate = source_order[next_source_index]
+            next_source_index = (next_source_index + 1) % len(source_order)
+            if candidate == "channel" and (not channel_exhausted) and current_token:
+                selected_source = "channel"
+                break
+            if candidate == "video" and (not video_exhausted) and current_video_token:
+                selected_source = "video"
+                break
+        if selected_source is None:
             break
+
         try:
-            page = search_channels_page(
-                keyword, session=session, continuation_token=current_token
-            )
+            if selected_source == "channel":
+                if session is None:
+                    channel_exhausted = True
+                    break
+                page = search_channels_page(
+                    keyword, session=session, continuation_token=current_token
+                )
+            else:
+                if video_session is None:
+                    video_exhausted = True
+                    break
+                page = search_videos_page(
+                    keyword, session=video_session, continuation_token=current_video_token
+                )
         except Exception as exc:  # pragma: no cover - network errors
             raise HTTPException(
                 status_code=502,
@@ -620,35 +700,36 @@ def _run_until_stopped_discovery(
         total_known += known_in_page
         total_blacklisted += blacklisted_in_page
         pages_processed += 1
-        if new_in_page == 0:
-            consecutive_no_new += 1
+        if selected_source == "channel":
+            if new_in_page == 0:
+                consecutive_no_new += 1
+            else:
+                consecutive_no_new = 0
+            page_index += 1
+            current_token = page.next_page_token
+            if current_token is None or consecutive_no_new >= no_new_threshold:
+                channel_exhausted = True
+            status_updates.append(
+                f"Keyword: {keyword} – Channel search page {page_index} – {new_in_page} new channels"
+            )
         else:
-            consecutive_no_new = 0
-
-        page_index += 1
-        current_token = page.next_page_token
-        if current_token is None:
-            exhausted_flag = True
-
-        if consecutive_no_new >= no_new_threshold:
-            exhausted_flag = True
+            if new_in_page == 0:
+                video_consecutive_no_new += 1
+            else:
+                video_consecutive_no_new = 0
+            video_page_index += 1
+            current_video_token = page.next_page_token
+            if current_video_token is None or video_consecutive_no_new >= no_new_threshold:
+                video_exhausted = True
+            status_updates.append(
+                f"Keyword: {keyword} – Video search page {video_page_index} – {new_in_page} new channels"
+            )
 
         timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
-        update_discovery_keyword_state(
-            keyword,
-            next_page_token=current_token,
-            page_index=page_index,
-            last_run_at=timestamp,
-            exhausted=exhausted_flag,
-            no_new_pages=consecutive_no_new,
-        )
+        _persist_state(timestamp)
         last_run_timestamp = timestamp
 
-        if len(new_channels) >= target_new_limit:
-            break
-        if pages_processed >= max_pages:
-            break
-        if exhausted_flag:
+        if len(new_channels) >= target_new_limit and video_page_index > 0:
             break
         if discovery_state.is_stop_requested():
             stop_requested = True
@@ -656,25 +737,11 @@ def _run_until_stopped_discovery(
 
     if last_run_timestamp is None:
         timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
-        update_discovery_keyword_state(
-            keyword,
-            next_page_token=current_token,
-            page_index=page_index,
-            last_run_at=timestamp,
-            exhausted=exhausted_flag,
-            no_new_pages=consecutive_no_new,
-        )
+        _persist_state(timestamp)
         last_run_timestamp = timestamp
-    elif exhausted_flag or stop_requested:
+    elif (channel_exhausted and video_exhausted) or stop_requested:
         timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
-        update_discovery_keyword_state(
-            keyword,
-            next_page_token=current_token,
-            page_index=page_index,
-            last_run_at=timestamp,
-            exhausted=exhausted_flag,
-            no_new_pages=consecutive_no_new,
-        )
+        _persist_state(timestamp)
         last_run_timestamp = timestamp
 
     inserted = database.bulk_insert_channels(new_channels)
@@ -688,6 +755,8 @@ def _run_until_stopped_discovery(
         response_payload["blacklisted"] = total_blacklisted
     if total_known:
         response_payload["known"] = total_known
+    if status_updates:
+        response_payload["statusUpdates"] = status_updates
 
     session_info = {
         "keyword": keyword,
@@ -695,8 +764,10 @@ def _run_until_stopped_discovery(
         "knownChannels": total_known,
         "pagesProcessed": pages_processed,
         "nextPageIndex": page_index,
-        "exhausted": exhausted_flag,
+        "videoPageIndex": video_page_index,
+        "exhausted": channel_exhausted and video_exhausted,
         "stopRequested": stop_requested,
+        "videoExhausted": video_exhausted,
     }
 
     return response_payload, session_info
@@ -785,6 +856,27 @@ def api_discover(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
             seen_ids=seen_ids,
             new_channels=new_channels,
         )
+        status_updates.append(
+            f"Keyword: {keyword} – Channel search – {new_in_keyword} new channels"
+        )
+        try:
+            video_page = search_videos_page(keyword)
+        except Exception as exc:  # pragma: no cover - network errors
+            print(f"Failed to search videos for keyword '{keyword}': {exc}")
+            video_page = None
+        if video_page:
+            new_from_videos, known_from_videos, blacklisted_from_videos = _process_search_results(
+                video_page.results,
+                context=context,
+                seen_ids=seen_ids,
+                new_channels=new_channels,
+            )
+            status_updates.append(
+                f"Keyword: {keyword} – Video search – {new_from_videos} new channels"
+            )
+            new_in_keyword += new_from_videos
+            known_in_keyword += known_from_videos
+            blacklisted_in_keyword += blacklisted_from_videos
         total_known += known_in_keyword
         total_blacklisted += blacklisted_in_keyword
 
@@ -799,6 +891,8 @@ def api_discover(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
         response_payload["blacklisted"] = total_blacklisted
     if total_known:
         response_payload["known"] = total_known
+    if status_updates:
+        response_payload["statusUpdates"] = status_updates
 
     return JSONResponse(response_payload)
 
