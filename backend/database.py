@@ -109,6 +109,13 @@ CHANNEL_COLUMNS = [
 LEGACY_TABLE = "channels"
 
 
+def _table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    )
+    return cursor.fetchone() is not None
+
+
 def _normalize_discovery_keyword(keyword: str) -> str:
     cleaned = (keyword or "").strip()
     return cleaned.lower()
@@ -255,11 +262,7 @@ def init_db() -> None:
 
 
 def _migrate_legacy_channels(cursor: sqlite3.Cursor) -> None:
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        (LEGACY_TABLE,),
-    )
-    if not cursor.fetchone():
+    if not _table_exists(cursor, LEGACY_TABLE):
         return
 
     cursor.execute(f"SELECT COUNT(*) AS count FROM {LEGACY_TABLE}")
@@ -292,6 +295,9 @@ def _ensure_discovery_state_columns(cursor: sqlite3.Cursor) -> None:
 
     for statement in alterations:
         cursor.execute(statement)
+
+    if not _table_exists(cursor, LEGACY_TABLE):
+        return
 
     cursor.execute(f"SELECT * FROM {LEGACY_TABLE}")
     rows = cursor.fetchall()
