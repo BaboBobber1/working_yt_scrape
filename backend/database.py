@@ -61,14 +61,14 @@ class DiscoveryKeywordState:
     keyword: str
     next_page_token: Optional[str]
     page_index: int
-    video_next_page_token: Optional[str] = None
-    video_page_index: int = 0
-    video_exhausted: bool = False
-    video_no_new_pages: int = 0
     last_run_at: Optional[str]
     exhausted: bool
     no_new_pages: int
     updated_at: Optional[str]
+    video_next_page_token: Optional[str] = None
+    video_page_index: int = 0
+    video_exhausted: bool = False
+    video_no_new_pages: int = 0
 
 PROJECT_BUNDLE_SCHEMA_VERSION = 2
 
