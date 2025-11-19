@@ -907,7 +907,7 @@ def api_discovery_loop_start(
     run_flag_value = data.get("run_until_stopped")
     if run_flag_value is None:
         run_flag_value = data.get("runUntilStopped")
-    run_flag = _coerce_bool(run_flag_value) if run_flag_value is not None else True
+    run_flag = _coerce_bool(run_flag_value) if run_flag_value is not None else False
     state = discovery_state.mark_started(
         runs=runs, discovered=discovered, run_until_stopped=run_flag
     )
